@@ -28,7 +28,7 @@ export function AppStartupStatusBanner() {
   const status = useAppStartupStatus();
   const [retrying, setRetrying] = useState(false);
 
-  if (status.currentStage !== "failed") {
+  if (!status || status.currentStage !== "failed") {
     return null;
   }
 

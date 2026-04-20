@@ -225,8 +225,33 @@ describe("components/cli-manager/tabs/Cx2ccTab", () => {
     const lowRadio = screen.getByRole("radio", { name: "low" });
     fireEvent.click(lowRadio);
 
+    expect(lowRadio).toBeChecked();
     expect(persistSettings).toHaveBeenCalledWith({
       cx2cc_model_reasoning_effort: "low",
+    });
+  });
+
+  it("updates reasoning effort UI immediately when leaving default", () => {
+    const persistSettings = vi.fn().mockResolvedValue(null);
+    render(
+      <CliManagerCx2ccTab
+        appSettings={createAppSettings({ cx2cc_model_reasoning_effort: "" })}
+        commonSettingsSaving={false}
+        onPersistCommonSettings={persistSettings}
+      />
+    );
+
+    const defaultRadio = screen.getByRole("radio", { name: "默认 / 不注入" });
+    const highRadio = screen.getByRole("radio", { name: "high" });
+
+    expect(defaultRadio).toBeChecked();
+
+    fireEvent.click(highRadio);
+
+    expect(highRadio).toBeChecked();
+    expect(defaultRadio).not.toBeChecked();
+    expect(persistSettings).toHaveBeenCalledWith({
+      cx2cc_model_reasoning_effort: "high",
     });
   });
 
@@ -369,22 +394,30 @@ describe("components/cli-manager/tabs/Cx2ccTab", () => {
     const persistSettings = vi.fn().mockResolvedValue(null);
     const { rerender } = render(
       <CliManagerCx2ccTab
-        appSettings={createAppSettings({ cx2cc_fallback_model_opus: "old-model" })}
+        appSettings={createAppSettings({
+          cx2cc_fallback_model_opus: "old-model",
+          cx2cc_model_reasoning_effort: "low",
+        })}
         commonSettingsSaving={false}
         onPersistCommonSettings={persistSettings}
       />
     );
 
     expect(screen.getByDisplayValue("old-model")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "low" })).toBeChecked();
 
     rerender(
       <CliManagerCx2ccTab
-        appSettings={createAppSettings({ cx2cc_fallback_model_opus: "new-model" })}
+        appSettings={createAppSettings({
+          cx2cc_fallback_model_opus: "new-model",
+          cx2cc_model_reasoning_effort: "xhigh",
+        })}
         commonSettingsSaving={false}
         onPersistCommonSettings={persistSettings}
       />
     );
 
     expect(screen.getByDisplayValue("new-model")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "xhigh" })).toBeChecked();
   });
 });

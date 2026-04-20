@@ -364,6 +364,26 @@ export const handlers = [
   ),
   http.post(`${TAURI_ENDPOINT}/skills_paths_get`, () => HttpResponse.json(null)),
 
+  // ---- App Startup ----
+  http.post(`${TAURI_ENDPOINT}/app_startup_status_get`, () =>
+    HttpResponse.json({
+      running: false,
+      currentStage: "idle",
+      failedStage: null,
+      errorMessage: null,
+      canRetry: false,
+    })
+  ),
+  http.post(`${TAURI_ENDPOINT}/app_startup_retry`, () =>
+    HttpResponse.json({
+      running: false,
+      currentStage: "idle",
+      failedStage: null,
+      errorMessage: null,
+      canRetry: false,
+    })
+  ),
+
   // ---- App About ----
   http.post(`${TAURI_ENDPOINT}/app_about_get`, () => HttpResponse.json(getAppAboutState())),
   http.post(`${TAURI_ENDPOINT}/desktop_window_set_theme`, () => HttpResponse.json(true)),
