@@ -21,14 +21,13 @@ export function useHomeOverviewFeed({
   homeUsageWindowDays,
 }: UseHomeOverviewFeedOptions) {
   const previousOverviewActiveRef = useRef(false);
-  const overviewForegroundPollingEnabled = overviewActive && foregroundActive;
+  const overviewForegroundActive = overviewActive && foregroundActive;
 
   const usageHeatmapQuery = useUsageHourlySeriesQuery(homeUsageWindowDays, {
     enabled: overviewActive && showOverviewUsageSection,
   });
   const providerLimitQuery = useProviderLimitUsageV1Query(null, {
-    enabled: overviewForegroundPollingEnabled,
-    refetchIntervalMs: overviewForegroundPollingEnabled ? 30000 : false,
+    enabled: overviewForegroundActive,
   });
   const requestLogsFeed = useRequestLogsFeed({
     limit: 50,
@@ -44,9 +43,9 @@ export function useHomeOverviewFeed({
   }, [showOverviewUsageSection, usageHeatmapQuery]);
 
   const refetchProviderLimitSilently = useCallback(async () => {
-    if (!overviewForegroundPollingEnabled) return null;
+    if (!overviewForegroundActive) return null;
     return providerLimitQuery.refetch();
-  }, [overviewForegroundPollingEnabled, providerLimitQuery]);
+  }, [overviewForegroundActive, providerLimitQuery]);
 
   const refetchRequestLogsSilently = useCallback(async () => {
     return requestLogsFeed.refreshRequestLogs();
@@ -74,24 +73,16 @@ export function useHomeOverviewFeed({
     const wasOverviewActive = previousOverviewActiveRef.current;
     previousOverviewActiveRef.current = overviewActive;
 
-    if (!overviewActive) return;
+    if (!overviewActive || wasOverviewActive) return;
 
-    emitBackgroundTaskVisibilityTrigger(backgroundTaskVisibilityTriggers.homeOverviewVisible);
-    if (wasOverviewActive) return;
-
-    void refetchUsageHeatmapSilently();
-    void refetchProviderLimitSilently();
-  }, [
-    overviewActive,
-    refetchProviderLimitSilently,
-    refetchUsageHeatmapSilently,
-  ]);
+    void emitBackgroundTaskVisibilityTrigger(backgroundTaskVisibilityTriggers.homeOverviewVisible);
+  }, [overviewActive]);
 
   useWindowForeground({
     enabled: overviewActive,
     throttleMs: 1000,
     onForeground: () => {
-      emitBackgroundTaskVisibilityTrigger(backgroundTaskVisibilityTriggers.homeOverviewVisible);
+      void emitBackgroundTaskVisibilityTrigger(backgroundTaskVisibilityTriggers.homeOverviewVisible);
       void refetchUsageHeatmapSilently();
       void refetchProviderLimitSilently();
     },

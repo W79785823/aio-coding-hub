@@ -6,7 +6,7 @@ import { useGatewayQuerySync } from "../useGatewayQuerySync";
 import { createTestQueryClient } from "../../test/utils/reactQuery";
 import { setTauriRuntime } from "../../test/utils/tauriRuntime";
 import { tauriListen, tauriUnlisten } from "../../test/mocks/tauri";
-import { gatewayKeys, usageKeys } from "../../query/keys";
+import { gatewayKeys, providerLimitUsageKeys, usageKeys } from "../../query/keys";
 
 function Harness() {
   useGatewayQuerySync();
@@ -70,6 +70,7 @@ describe("hooks/useGatewayQuerySync", () => {
     requestHandler({ payload: { phase: "complete" } });
     vi.advanceTimersByTime(1000);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: usageKeys.all });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: providerLimitUsageKeys.all });
 
     unmount();
     expect(tauriUnlisten).toHaveBeenCalled();

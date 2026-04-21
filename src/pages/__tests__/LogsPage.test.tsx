@@ -9,7 +9,6 @@ import { clearTauriRuntime, setTauriRuntime } from "../../test/utils/tauriRuntim
 import {
   useRequestAttemptLogsByTraceIdQuery,
   useRequestLogDetailQuery,
-  useRequestLogsIncrementalPollQuery,
   useRequestLogsListAllQuery,
 } from "../../query/requestLogs";
 import type { TraceSession } from "../../services/gateway/traceStore";
@@ -47,7 +46,6 @@ vi.mock("../../query/requestLogs", async () => {
   return {
     ...actual,
     useRequestLogsListAllQuery: vi.fn(),
-    useRequestLogsIncrementalPollQuery: vi.fn(),
     useRequestLogDetailQuery: vi.fn(),
     useRequestAttemptLogsByTraceIdQuery: vi.fn(),
   };
@@ -83,7 +81,6 @@ describe("pages/LogsPage", () => {
       isFetching: false,
       refetch: vi.fn(),
     } as any);
-    vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({ isFetching: false } as any);
     vi.mocked(useRequestLogDetailQuery).mockReturnValue({ data: null, isFetching: false } as any);
     vi.mocked(useRequestAttemptLogsByTraceIdQuery).mockReturnValue({
       data: [],
@@ -108,7 +105,6 @@ describe("pages/LogsPage", () => {
       isFetching: false,
       refetch: vi.fn(),
     } as any);
-    vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({ isFetching: false } as any);
     vi.mocked(useRequestLogDetailQuery).mockReturnValue({ data: null, isFetching: false } as any);
     vi.mocked(useRequestAttemptLogsByTraceIdQuery).mockReturnValue({
       data: [],
@@ -145,7 +141,6 @@ describe("pages/LogsPage", () => {
       isFetching: false,
       refetch: vi.fn(),
     } as any);
-    vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({ isFetching: false } as any);
     vi.mocked(useRequestLogDetailQuery).mockReturnValue({ data: null, isFetching: false } as any);
     vi.mocked(useRequestAttemptLogsByTraceIdQuery).mockReturnValue({
       data: [],
@@ -185,7 +180,6 @@ describe("pages/LogsPage", () => {
       isFetching: false,
       refetch: vi.fn(),
     } as any);
-    vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({ isFetching: false } as any);
     vi.mocked(useRequestLogDetailQuery).mockReturnValue({ data: null, isFetching: false } as any);
     vi.mocked(useRequestAttemptLogsByTraceIdQuery).mockReturnValue({
       data: [],
@@ -218,7 +212,6 @@ describe("pages/LogsPage", () => {
       isFetching: false,
       refetch: vi.fn(),
     } as any);
-    vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({ isFetching: false } as any);
     vi.mocked(useRequestLogDetailQuery).mockReturnValue({ data: null, isFetching: false } as any);
     vi.mocked(useRequestAttemptLogsByTraceIdQuery).mockReturnValue({
       data: [],
@@ -245,7 +238,6 @@ describe("pages/LogsPage", () => {
       isFetching: false,
       refetch: vi.fn(),
     } as any);
-    vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({ isFetching: false } as any);
     vi.mocked(useRequestLogDetailQuery).mockReturnValue({ data: null, isFetching: false } as any);
     vi.mocked(useRequestAttemptLogsByTraceIdQuery).mockReturnValue({
       data: [],
@@ -271,7 +263,6 @@ describe("pages/LogsPage", () => {
       isFetching: false,
       refetch: vi.fn(),
     } as any);
-    vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({ isFetching: false } as any);
     vi.mocked(useRequestLogDetailQuery).mockReturnValue({ data: null, isFetching: false } as any);
     vi.mocked(useRequestAttemptLogsByTraceIdQuery).mockReturnValue({
       data: [],
@@ -304,7 +295,6 @@ describe("pages/LogsPage", () => {
       isFetching: false,
       refetch: vi.fn(),
     } as any);
-    vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({ isFetching: false } as any);
     vi.mocked(useRequestLogDetailQuery).mockReturnValue({ data: null, isFetching: false } as any);
     vi.mocked(useRequestAttemptLogsByTraceIdQuery).mockReturnValue({
       data: [],
@@ -337,7 +327,6 @@ describe("pages/LogsPage", () => {
       isFetching: false,
       refetch: vi.fn(),
     } as any);
-    vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({ isFetching: false } as any);
     vi.mocked(useRequestLogDetailQuery).mockReturnValue({ data: null, isFetching: false } as any);
     vi.mocked(useRequestAttemptLogsByTraceIdQuery).mockReturnValue({
       data: [],

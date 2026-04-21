@@ -20,7 +20,6 @@ import { useProvidersListQuery } from "../../query/providers";
 import {
   useRequestAttemptLogsByTraceIdQuery,
   useRequestLogDetailQuery,
-  useRequestLogsIncrementalPollQuery,
   useRequestLogsListAllQuery,
 } from "../../query/requestLogs";
 import {
@@ -176,7 +175,6 @@ vi.mock("../../query/requestLogs", async () => {
   return {
     ...actual,
     useRequestLogsListAllQuery: vi.fn(),
-    useRequestLogsIncrementalPollQuery: vi.fn(),
     useRequestLogDetailQuery: vi.fn(),
     useRequestAttemptLogsByTraceIdQuery: vi.fn(),
   };
@@ -228,12 +226,6 @@ function mockHomePageBaseQueries() {
   vi.mocked(useGatewaySessionsListQuery).mockReturnValue({ data: null, isLoading: false } as any);
   vi.mocked(useRequestLogsListAllQuery).mockReturnValue({
     data: [],
-    isLoading: false,
-    isFetching: false,
-    refetch: vi.fn(),
-  } as any);
-  vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({
-    data: 0,
     isLoading: false,
     isFetching: false,
     refetch: vi.fn(),
@@ -385,12 +377,6 @@ describe("pages/HomePage", () => {
         isLoading: false,
         isFetching: true,
         refetch: requestLogsRefetch,
-      } as any);
-      vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({
-        data: 0,
-        isLoading: false,
-        isFetching: false,
-        refetch: vi.fn(),
       } as any);
 
       vi.mocked(useSortModesListQuery).mockReturnValue({
@@ -692,12 +678,6 @@ describe("pages/HomePage", () => {
       isFetching: false,
       refetch: vi.fn(),
     } as any);
-    vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({
-      data: 0,
-      isLoading: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as any);
 
     vi.mocked(useSortModesListQuery).mockReturnValue({ data: null, isLoading: true } as any);
     vi.mocked(useSortModeActiveListQuery).mockReturnValue({ data: null, isLoading: true } as any);
@@ -854,12 +834,6 @@ describe("pages/HomePage", () => {
       isFetching: false,
       refetch: vi.fn(),
     } as any);
-    vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({
-      data: 0,
-      isLoading: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as any);
 
     vi.mocked(useSortModesListQuery).mockReturnValue({
       data: [{ id: 1, name: "M1" }],
@@ -929,12 +903,6 @@ describe("pages/HomePage", () => {
     vi.mocked(useGatewaySessionsListQuery).mockReturnValue({ data: [], isLoading: false } as any);
     vi.mocked(useRequestLogsListAllQuery).mockReturnValue({
       data: [],
-      isLoading: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as any);
-    vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({
-      data: 0,
       isLoading: false,
       isFetching: false,
       refetch: vi.fn(),
@@ -1017,12 +985,6 @@ describe("pages/HomePage", () => {
     vi.mocked(useGatewaySessionsListQuery).mockReturnValue({ data: [], isLoading: false } as any);
     vi.mocked(useRequestLogsListAllQuery).mockReturnValue({
       data: [],
-      isLoading: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as any);
-    vi.mocked(useRequestLogsIncrementalPollQuery).mockReturnValue({
-      data: 0,
       isLoading: false,
       isFetching: false,
       refetch: vi.fn(),

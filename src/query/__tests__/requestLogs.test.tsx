@@ -12,7 +12,6 @@ import { setTauriRuntime } from "../../test/utils/tauriRuntime";
 import {
   useRequestAttemptLogsByTraceIdQuery,
   useRequestLogDetailQuery,
-  useRequestLogsIncrementalPollQuery,
   useRequestLogsIncrementalRefreshMutation,
   useRequestLogsListAllQuery,
 } from "../requestLogs";
@@ -190,79 +189,6 @@ describe("query/requestLogs", () => {
     await waitFor(() => {
       expect(requestAttemptLogsByTraceId).toHaveBeenCalledWith("trace-1", 10);
     });
-  });
-
-  it("incremental poll waits for base list and then merges after cursor", async () => {
-    setTauriRuntime();
-
-    const client = createTestQueryClient();
-    const wrapper = createQueryWrapper(client);
-
-    // base list not loaded yet (undefined) -> returns 0 and does not call services
-    const { result: poll1 } = renderHook(() => useRequestLogsIncrementalPollQuery(10), { wrapper });
-    await act(async () => {
-      const res = await poll1.current.refetch();
-      expect(res.data).toBe(0);
-    });
-    expect(requestLogsListAll).not.toHaveBeenCalled();
-
-    // base list is loaded but empty -> full list fetch path, then sorts & sets list cache
-    const listKey = ["requestLogs", "list", "all", 10] as any;
-    client.setQueryData(listKey, []);
-
-    vi.mocked(requestLogsListAll).mockResolvedValueOnce([
-      makeRequestLogSummary({ id: 1, created_at: 10, created_at_ms: null }),
-      makeRequestLogSummary({ id: 2, created_at: 11, created_at_ms: 1 }),
-    ] as any);
-
-    await act(async () => {
-      const res = await poll1.current.refetch();
-      expect(res.data).toBe(2);
-    });
-
-    const sorted = client.getQueryData<any[]>(listKey) ?? [];
-    expect(sorted[0]?.id).toBe(1); // created_at_ms fallback wins over created_at
-
-    // cursor > 0 -> listAfterIdAll and merge path
-    vi.mocked(requestLogsListAfterIdAll).mockResolvedValueOnce([
-      makeRequestLogSummary({ id: 3, created_at: 12, created_at_ms: 12000 }),
-    ] as any);
-
-    await act(async () => {
-      const res = await poll1.current.refetch();
-      expect(res.data).toBe(1);
-    });
-
-    const merged = client.getQueryData<any[]>(listKey) ?? [];
-    expect(merged.some((r) => r.id === 3)).toBe(true);
-  });
-
-  it("incremental poll falls back to full refresh while an in-progress row is cached", async () => {
-    setTauriRuntime();
-
-    const client = createTestQueryClient();
-    const wrapper = createQueryWrapper(client);
-    const listKey = ["requestLogs", "list", "all", 10] as any;
-
-    const nowSec = Math.floor(Date.now() / 1000);
-    client.setQueryData(listKey, [
-      makeRequestLogSummary({ id: 5, status: null, error_code: null, created_at: nowSec }),
-    ] as any);
-
-    vi.mocked(requestLogsListAll).mockResolvedValueOnce([
-      makeRequestLogSummary({ id: 5, status: 200, error_code: null, created_at: 20 }),
-    ] as any);
-
-    const { result } = renderHook(() => useRequestLogsIncrementalPollQuery(10), { wrapper });
-
-    await act(async () => {
-      const res = await result.current.refetch();
-      expect(res.data).toBe(1);
-    });
-
-    expect(requestLogsListAll).toHaveBeenCalledWith(10);
-    expect(requestLogsListAfterIdAll).not.toHaveBeenCalled();
-    expect((client.getQueryData<any[]>(listKey) ?? [])[0]?.status).toBe(200);
   });
 
   it("incremental refresh mutation keeps backend rows and cache stable on null items", async () => {

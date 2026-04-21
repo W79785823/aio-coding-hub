@@ -13,7 +13,6 @@ import {
 import { requestLogsKeys } from "./keys";
 
 type RequestLogsListQueryResult = RequestLogSummary[] | null;
-type RequestLogsIncrementalPollResult = number | null;
 type RequestLogsIncrementalRefreshResult = {
   mode: "full" | "incremental";
   items: RequestLogSummary[] | null;
@@ -68,57 +67,6 @@ export function useRequestLogsListAllQuery(
     enabled,
     placeholderData: keepPreviousData,
     refetchInterval: options?.refetchIntervalMs ?? false,
-  });
-}
-
-export function useRequestLogsIncrementalPollQuery(
-  limit: number,
-  options?: { enabled?: boolean; refetchIntervalMs?: number | false }
-) {
-  const queryClient = useQueryClient();
-  const enabled = isRequestLogsQueryEnabled(options?.enabled);
-
-  return useQuery<RequestLogsIncrementalPollResult>({
-    queryKey: requestLogsKeys.pollAfterIdAll(limit),
-    queryFn: async () => {
-      const prev = queryClient.getQueryData<RequestLogSummary[] | null>(
-        requestLogsKeys.listAll(limit)
-      );
-
-      // Wait until the primary list query has loaded at least once.
-      if (prev === undefined) return 0;
-
-      const cursorId = prev?.length ? computeRequestLogsCursorId(prev) : 0;
-      const useFullRefresh = shouldUseFullRefresh(prev);
-
-      const items = useFullRefresh
-        ? await requestLogsListAll(limit)
-        : await requestLogsListAfterIdAll(cursorId, limit);
-
-      if (items == null) {
-        queryClient.setQueryData(requestLogsKeys.listAll(limit), null);
-        return null;
-      }
-
-      if (useFullRefresh) {
-        queryClient.setQueryData(
-          requestLogsKeys.listAll(limit),
-          items.slice().sort(sortRequestLogsDesc)
-        );
-        return items.length;
-      }
-
-      if (items.length === 0) return 0;
-
-      queryClient.setQueryData<RequestLogSummary[]>(requestLogsKeys.listAll(limit), (cur) =>
-        mergeRequestLogs(cur ?? [], items, limit)
-      );
-
-      return items.length;
-    },
-    enabled,
-    refetchInterval: options?.refetchIntervalMs ?? false,
-    refetchIntervalInBackground: false,
   });
 }
 

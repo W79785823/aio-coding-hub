@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { gatewayEventNames } from "../constants/gatewayEvents";
-import { gatewayKeys, usageKeys } from "../query/keys";
+import { gatewayKeys, providerLimitUsageKeys, usageKeys } from "../query/keys";
 import { logToConsole } from "../services/consoleLog";
 import { subscribeGatewayEvent } from "../services/gateway/gatewayEventBus";
 import type { GatewayRequestSignalEvent } from "../services/gateway/gatewayEvents";
@@ -31,6 +31,7 @@ export function useGatewayQuerySync() {
 
     const invalidateUsageDerived = () => {
       queryClient.invalidateQueries({ queryKey: usageKeys.all });
+      queryClient.invalidateQueries({ queryKey: providerLimitUsageKeys.all });
     };
 
     const scheduleInvalidateCircuits = () => {
