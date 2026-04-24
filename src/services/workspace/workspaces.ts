@@ -79,9 +79,7 @@ function toWorkspacePreview(value: GeneratedWorkspacePreview): WorkspacePreview 
   };
 }
 
-function toWorkspaceApplyReport(
-  value: GeneratedWorkspaceApplyReport
-): WorkspaceApplyReport {
+function toWorkspaceApplyReport(value: GeneratedWorkspaceApplyReport): WorkspaceApplyReport {
   return {
     ...value,
     cli_key: toCliKey(value.cli_key, "workspace_apply.cli_key"),
@@ -136,8 +134,7 @@ export async function workspaceDelete(workspaceId: number) {
     title: "删除工作区失败",
     cmd: "workspace_delete",
     args: { workspaceId },
-    invoke: () =>
-      commands.workspaceDelete(workspaceId) as Promise<GeneratedCommandResult<boolean>>,
+    invoke: () => commands.workspaceDelete(workspaceId) as Promise<GeneratedCommandResult<boolean>>,
   });
 }
 
@@ -157,6 +154,9 @@ export async function workspaceApply(workspaceId: number) {
     cmd: "workspace_apply",
     args: { workspaceId },
     invoke: async () =>
-      mapGeneratedCommandResponse(await commands.workspaceApply(workspaceId), toWorkspaceApplyReport),
+      mapGeneratedCommandResponse(
+        await commands.workspaceApply(workspaceId),
+        toWorkspaceApplyReport
+      ),
   });
 }

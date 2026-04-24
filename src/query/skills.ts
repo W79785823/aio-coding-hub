@@ -252,8 +252,7 @@ export function useSkillImportLocalMutation(workspaceId: number) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (dirName: string) =>
-      skillImportLocal({ workspaceId, dirName }),
+    mutationFn: async (dirName: string) => skillImportLocal({ workspaceId, dirName }),
     onSuccess: (next) => {
       if (!next) return;
       queryClient.setQueryData<InstalledSkillSummary[]>(
@@ -274,8 +273,7 @@ export function useSkillReturnToLocalMutation(workspaceId: number) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (skillId: number) =>
-      skillReturnToLocal({ workspaceId, skillId }),
+    mutationFn: async (skillId: number) => skillReturnToLocal({ workspaceId, skillId }),
     onSuccess: (ok, skillId) => {
       if (!ok) return;
       queryClient.setQueryData<InstalledSkillSummary[]>(
@@ -292,8 +290,7 @@ export function useSkillLocalDeleteMutation(workspaceId: number) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (dirName: string) =>
-      skillLocalDelete({ workspaceId, dirName }),
+    mutationFn: async (dirName: string) => skillLocalDelete({ workspaceId, dirName }),
     onSuccess: (ok, dirName) => {
       if (!ok) return;
       queryClient.setQueryData<LocalSkillSummary[]>(skillsKeys.localList(workspaceId), (cur) =>
@@ -307,8 +304,7 @@ export function useSkillsImportLocalBatchMutation(workspaceId: number) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (dirNames: string[]) =>
-      skillsImportLocalBatch({ workspaceId, dirNames }),
+    mutationFn: async (dirNames: string[]) => skillsImportLocalBatch({ workspaceId, dirNames }),
     onSuccess: (report) => {
       if (!report) return;
       const imported = report.imported ?? [];
@@ -345,8 +341,7 @@ export function useSkillUpdateMutation(workspaceId: number) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (skillId: number) =>
-      skillUpdate({ workspaceId, skillId }),
+    mutationFn: async (skillId: number) => skillUpdate({ workspaceId, skillId }),
     onSuccess: (next) => {
       if (!next) return;
       queryClient.setQueryData<InstalledSkillSummary[]>(

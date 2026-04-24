@@ -30,7 +30,9 @@ vi.mock("../../consoleLog", async () => {
 
 describe("services/claude/claudeModelValidationHistory", () => {
   it("rethrows invoke errors and logs", async () => {
-    vi.mocked(commands.claudeValidationHistoryList).mockRejectedValueOnce(new Error("history boom"));
+    vi.mocked(commands.claudeValidationHistoryList).mockRejectedValueOnce(
+      new Error("history boom")
+    );
 
     await expect(claudeValidationHistoryList({ provider_id: 1, limit: 50 })).rejects.toThrow(
       "history boom"

@@ -47,7 +47,11 @@ function buildQueryParamsV2(
 function toUsageProviderRow(value: GeneratedUsageProviderRow): UsageProviderRow {
   return {
     ...value,
-    cli_key: narrowGeneratedStringUnion(value.cli_key, CLI_KEY_VALUES, "usage_provider_row.cli_key"),
+    cli_key: narrowGeneratedStringUnion(
+      value.cli_key,
+      CLI_KEY_VALUES,
+      "usage_provider_row.cli_key"
+    ),
   };
 }
 

@@ -356,7 +356,9 @@ export function useCliManagerPageDataModel() {
         updatedSettings.upstream_request_timeout_non_streaming_seconds
       );
       setProviderCooldownSeconds(updatedSettings.provider_cooldown_seconds);
-      setProviderBaseUrlPingCacheTtlSeconds(updatedSettings.provider_base_url_ping_cache_ttl_seconds);
+      setProviderBaseUrlPingCacheTtlSeconds(
+        updatedSettings.provider_base_url_ping_cache_ttl_seconds
+      );
       setCircuitBreakerFailureThreshold(updatedSettings.circuit_breaker_failure_threshold);
       setCircuitBreakerOpenDurationMinutes(updatedSettings.circuit_breaker_open_duration_minutes);
       toast("已保存");
@@ -448,7 +450,6 @@ export function useCliManagerPageDataModel() {
           codexConfig?.config_dir ||
           undefined,
       });
-
     } catch (err) {
       logToConsole("error", "打开 Codex 目录选择器失败", { error: String(err) });
       toast("打开目录选择器失败：请稍后重试");

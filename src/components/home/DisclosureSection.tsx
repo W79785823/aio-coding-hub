@@ -18,7 +18,9 @@ export function DisclosureSection({
   const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <div className={cn("rounded-lg border border-slate-200/60 dark:border-slate-700/60", className)}>
+    <div
+      className={cn("rounded-lg border border-slate-200/60 dark:border-slate-700/60", className)}
+    >
       <button
         type="button"
         className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-slate-600 hover:bg-slate-50/50 dark:text-slate-400 dark:hover:bg-slate-700/30 transition-colors"

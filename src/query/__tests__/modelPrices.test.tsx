@@ -36,9 +36,7 @@ vi.mock("../../services/usage/modelPrices", async () => {
   };
 });
 
-function makeModelPriceSummary(
-  overrides: Partial<ModelPriceSummary> = {}
-): ModelPriceSummary {
+function makeModelPriceSummary(overrides: Partial<ModelPriceSummary> = {}): ModelPriceSummary {
   return {
     id: 1,
     cli_key: "claude",
@@ -97,10 +95,7 @@ describe("query/modelPrices", () => {
 
     vi.mocked(modelPricesList)
       .mockResolvedValueOnce([makeModelPriceSummary({ id: 1 })])
-      .mockResolvedValueOnce([
-        makeModelPriceSummary({ id: 2 }),
-        makeModelPriceSummary({ id: 3 }),
-      ])
+      .mockResolvedValueOnce([makeModelPriceSummary({ id: 2 }), makeModelPriceSummary({ id: 3 })])
       .mockResolvedValueOnce([]);
 
     const client = createTestQueryClient();

@@ -238,8 +238,7 @@ const RequestLogCard = memo(function RequestLogCard({
 
   // Codex fast mode (priority service tier) detection
   const isPriorityServiceTier =
-    log.cli_key === "codex" &&
-    hasPriorityServiceTierSpecialSetting(log.special_settings_json);
+    log.cli_key === "codex" && hasPriorityServiceTierSpecialSetting(log.special_settings_json);
 
   const cacheWrite = (() => {
     // 优先展示有值的 TTL 桶；若都为 0，则仍展示 0 而不是 "—"。
@@ -478,9 +477,7 @@ const RequestLogCard = memo(function RequestLogCard({
                   <span className="font-mono tabular-nums text-slate-700 dark:text-slate-200 truncate">
                     {costUsdText}
                   </span>
-                  {isPriorityServiceTier && (
-                    <FastModeBadge showCustomTooltip={showCustomTooltip} />
-                  )}
+                  {isPriorityServiceTier && <FastModeBadge showCustomTooltip={showCustomTooltip} />}
                 </div>
 
                 <div className="flex items-center gap-1 h-4" title="Output Tokens">

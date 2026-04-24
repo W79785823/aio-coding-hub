@@ -92,7 +92,10 @@ export type ProviderEditorPayloadBuildSuccess = {
 };
 
 export type CopyApiKeyActionContext = ProviderActionContext &
-  Pick<FormActionContext, "copyingApiKey" | "setCopyingApiKey" | "apiKeyConfigured" | "apiKeyValue">;
+  Pick<
+    FormActionContext,
+    "copyingApiKey" | "setCopyingApiKey" | "apiKeyConfigured" | "apiKeyValue"
+  >;
 
 export type SaveActionContext = ProviderActionContext &
   ProviderEditorPayloadContext &
@@ -104,7 +107,10 @@ export type SaveActionContext = ProviderActionContext &
 export type OAuthActionContext = ProviderActionContext &
   ProviderEditorPayloadContext &
   Pick<FormActionContext, "form"> &
-  Pick<AuthActionContext, "oauthStatus" | "setOauthStatus" | "refreshOauthStatus" | "setOauthLoading"> & {
+  Pick<
+    AuthActionContext,
+    "oauthStatus" | "setOauthStatus" | "refreshOauthStatus" | "setOauthLoading"
+  > & {
     persistProvider: (input: ProviderUpsertInput) => Promise<ProviderSummary>;
     removeProvider: (providerId: number) => Promise<boolean>;
   };

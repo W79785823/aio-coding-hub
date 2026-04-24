@@ -13,11 +13,7 @@ export function RequestLogDetailRawTab({ selectedLog }: RequestLogDetailRawTabPr
   const hasAny = errorDetailsJson != null || attemptsJson != null || usageJson != null;
 
   if (!hasAny) {
-    return (
-      <div className="text-sm text-slate-500 dark:text-slate-400">
-        无原始数据。
-      </div>
-    );
+    return <div className="text-sm text-slate-500 dark:text-slate-400">无原始数据。</div>;
   }
 
   return (

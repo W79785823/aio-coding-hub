@@ -34,9 +34,7 @@ vi.mock("../../consoleLog", async () => {
 });
 
 describe("services/workspace/workspaces", () => {
-  function createWorkspaceSummary(
-    overrides: Partial<WorkspaceSummary> = {}
-  ): WorkspaceSummary {
+  function createWorkspaceSummary(overrides: Partial<WorkspaceSummary> = {}): WorkspaceSummary {
     return {
       id: 1,
       cli_key: "claude",

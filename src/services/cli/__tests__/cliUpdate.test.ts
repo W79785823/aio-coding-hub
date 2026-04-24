@@ -27,7 +27,9 @@ vi.mock("../../consoleLog", async () => {
 
 describe("services/cli/cliUpdate", () => {
   it("rethrows invoke errors and logs", async () => {
-    vi.mocked(commands.cliCheckLatestVersion).mockRejectedValueOnce(new Error("version check boom"));
+    vi.mocked(commands.cliCheckLatestVersion).mockRejectedValueOnce(
+      new Error("version check boom")
+    );
 
     await expect(cliCheckLatestVersion("claude")).rejects.toThrow("version check boom");
     expect(logToConsole).toHaveBeenCalledWith(

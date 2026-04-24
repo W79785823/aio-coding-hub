@@ -2,12 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import {
-  PointerSensor,
-  type DragEndEvent,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
+import { PointerSensor, type DragEndEvent, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
 import { logToConsole } from "../../../services/consoleLog";
 import { copyText } from "../../../services/clipboard";

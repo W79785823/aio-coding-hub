@@ -120,8 +120,9 @@ export async function costBreakdownProviderV1(
       limit: input?.limit ?? null,
     },
     invoke: async () =>
-      mapGeneratedCommandResponse(await commands.costBreakdownProviderV1(params, input?.limit ?? null), (rows) =>
-        rows.map(toCostProviderBreakdownRowV1)
+      mapGeneratedCommandResponse(
+        await commands.costBreakdownProviderV1(params, input?.limit ?? null),
+        (rows) => rows.map(toCostProviderBreakdownRowV1)
       ),
   });
 }
@@ -155,8 +156,9 @@ export async function costTopRequestsV1(
       limit: input?.limit ?? null,
     },
     invoke: async () =>
-      mapGeneratedCommandResponse(await commands.costTopRequestsV1(params, input?.limit ?? null), (rows) =>
-        rows.map(toCostTopRequestRowV1)
+      mapGeneratedCommandResponse(
+        await commands.costTopRequestsV1(params, input?.limit ?? null),
+        (rows) => rows.map(toCostTopRequestRowV1)
       ),
   });
 }
@@ -197,9 +199,4 @@ export async function costBackfillMissingV1(
   });
 }
 
-export type {
-  CostBackfillReportV1,
-  CostModelBreakdownRowV1,
-  CostSummaryV1,
-  CostTrendRowV1,
-};
+export type { CostBackfillReportV1, CostModelBreakdownRowV1, CostSummaryV1, CostTrendRowV1 };

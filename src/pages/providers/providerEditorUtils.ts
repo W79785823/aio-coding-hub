@@ -1,8 +1,10 @@
 import { FREE_TAG } from "../../constants/providers";
-import type {
-  ProviderEditorDialogFormInput,
-} from "../../schemas/providerEditorDialog";
-import { getProviderTypeInfo, type CliKey, type ProviderSummary } from "../../services/providers/providers";
+import type { ProviderEditorDialogFormInput } from "../../schemas/providerEditorDialog";
+import {
+  getProviderTypeInfo,
+  type CliKey,
+  type ProviderSummary,
+} from "../../services/providers/providers";
 import { cliLongLabel } from "../../constants/clis";
 import type { ProviderEditorInitialValues } from "./providerDuplicate";
 import type { BaseUrlRow } from "./types";

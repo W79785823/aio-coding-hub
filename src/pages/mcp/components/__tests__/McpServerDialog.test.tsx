@@ -30,9 +30,7 @@ type UpsertMutationMock = Pick<
   "isPending" | "mutateAsync"
 >;
 
-function createUpsertMutation(
-  overrides: Partial<UpsertMutationMock> = {}
-): UpsertMutationMock {
+function createUpsertMutation(overrides: Partial<UpsertMutationMock> = {}): UpsertMutationMock {
   return {
     isPending: false,
     mutateAsync: vi.fn(),
@@ -46,9 +44,7 @@ function mockUpsertMutation(mutation: UpsertMutationMock) {
   );
 }
 
-function makeMcpServerSummary(
-  overrides: Partial<McpServerSummary> = {}
-): McpServerSummary {
+function makeMcpServerSummary(overrides: Partial<McpServerSummary> = {}): McpServerSummary {
   return {
     id: 1,
     server_key: "fetch",
@@ -67,9 +63,7 @@ function makeMcpServerSummary(
   };
 }
 
-function makeMcpImportServer(
-  overrides: Partial<McpImportServer> = {}
-): McpImportServer {
+function makeMcpImportServer(overrides: Partial<McpImportServer> = {}): McpImportServer {
   return {
     server_key: "fetch",
     name: "Fetch",
@@ -85,9 +79,7 @@ function makeMcpImportServer(
   };
 }
 
-function makeMcpParseResult(
-  overrides: Partial<McpParseResult> = {}
-): McpParseResult {
+function makeMcpParseResult(overrides: Partial<McpParseResult> = {}): McpParseResult {
   return {
     servers: [makeMcpImportServer()],
     ...overrides,
@@ -198,18 +190,16 @@ describe("pages/mcp/components/McpServerDialog", () => {
   });
 
   it("saves stdio server with blank env row and cwd", async () => {
-    const mutateAsync = vi
-      .fn()
-      .mockResolvedValueOnce(
-        makeMcpServerSummary({
-          id: 1,
-          server_key: "demo",
-          name: "Demo",
-          transport: "stdio",
-          command: "node",
-          cwd: "/tmp",
-        })
-      );
+    const mutateAsync = vi.fn().mockResolvedValueOnce(
+      makeMcpServerSummary({
+        id: 1,
+        server_key: "demo",
+        name: "Demo",
+        transport: "stdio",
+        command: "node",
+        cwd: "/tmp",
+      })
+    );
     mockUpsertMutation(createUpsertMutation({ mutateAsync }));
 
     const onOpenChange = vi.fn();
@@ -266,18 +256,16 @@ describe("pages/mcp/components/McpServerDialog", () => {
       <McpServerDialog
         workspaceId={1}
         open={true}
-        editTarget={
-          makeMcpServerSummary({
-            id: 7,
-            server_key: "remote",
-            name: "Remote",
-            transport: "http",
-            command: null,
-            args: [],
-            url: "https://example.com/mcp",
-            header_keys: ["Authorization"],
-          })
-        }
+        editTarget={makeMcpServerSummary({
+          id: 7,
+          server_key: "remote",
+          name: "Remote",
+          transport: "http",
+          command: null,
+          args: [],
+          url: "https://example.com/mcp",
+          header_keys: ["Authorization"],
+        })}
         onOpenChange={onOpenChange}
       />
     );

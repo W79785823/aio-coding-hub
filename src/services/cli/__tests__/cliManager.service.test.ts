@@ -167,7 +167,9 @@ function makeClaudeSettingsState(
 
 describe("services/cli/cliManager", () => {
   it("rethrows invoke errors and logs", async () => {
-    vi.mocked(commands.cliManagerClaudeInfoGet).mockRejectedValueOnce(new Error("cli manager boom"));
+    vi.mocked(commands.cliManagerClaudeInfoGet).mockRejectedValueOnce(
+      new Error("cli manager boom")
+    );
 
     await expect(cliManagerClaudeInfoGet()).rejects.toThrow("cli manager boom");
     expect(logToConsole).toHaveBeenCalledWith(

@@ -479,7 +479,9 @@ describe("settings/useSettingsPersistence", () => {
     } as any);
 
     const mutation = { mutateAsync: vi.fn() };
-    mutation.mutateAsync.mockResolvedValue(createSettingsMutationResult({ home_usage_period: "month" }));
+    mutation.mutateAsync.mockResolvedValue(
+      createSettingsMutationResult({ home_usage_period: "month" })
+    );
     vi.mocked(useSettingsSetMutation).mockReturnValue(mutation as any);
 
     const { result } = renderHook(() => useSettingsPersistence({ gateway: null, about: null }));
@@ -538,7 +540,9 @@ describe("settings/useSettingsPersistence", () => {
     vi.mocked(gatewayCheckPortAvailable).mockResolvedValue(true);
 
     const mutation = { mutateAsync: vi.fn() };
-    mutation.mutateAsync.mockResolvedValue(createSettingsMutationResult({ log_retention_days: 10 }));
+    mutation.mutateAsync.mockResolvedValue(
+      createSettingsMutationResult({ log_retention_days: 10 })
+    );
     vi.mocked(useSettingsSetMutation).mockReturnValue(mutation as any);
 
     const { result } = renderHook(() => useSettingsPersistence({ gateway: null, about: null }));

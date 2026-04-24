@@ -1,7 +1,4 @@
-import {
-  commands,
-  type FrontendErrorReportInput,
-} from "../../generated/bindings";
+import { commands, type FrontendErrorReportInput } from "../../generated/bindings";
 import { invokeGeneratedIpc, type GeneratedCommandResult } from "../generatedIpc";
 
 export type { FrontendErrorReportInput };

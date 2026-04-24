@@ -85,7 +85,10 @@ describe("services/gateway/gateway", () => {
 
     vi.mocked(commands.gatewayStatus).mockResolvedValueOnce(status as any);
     vi.mocked(commands.gatewaySessionsList).mockResolvedValueOnce({ status: "ok", data: sessions });
-    vi.mocked(commands.gatewayCircuitStatus).mockResolvedValueOnce({ status: "ok", data: circuits });
+    vi.mocked(commands.gatewayCircuitStatus).mockResolvedValueOnce({
+      status: "ok",
+      data: circuits,
+    });
 
     await expect(gatewayStatus()).resolves.toEqual(status);
     await expect(gatewaySessionsList(20)).resolves.toEqual(sessions);
@@ -105,7 +108,10 @@ describe("services/gateway/gateway", () => {
       status: "ok",
       data: true,
     });
-    vi.mocked(commands.gatewaySessionsList).mockResolvedValueOnce({ status: "ok", data: [] as any });
+    vi.mocked(commands.gatewaySessionsList).mockResolvedValueOnce({
+      status: "ok",
+      data: [] as any,
+    });
     vi.mocked(commands.gatewayCircuitStatus)
       .mockResolvedValueOnce({ status: "ok", data: [] as any })
       .mockResolvedValueOnce({ status: "ok", data: [] as any })

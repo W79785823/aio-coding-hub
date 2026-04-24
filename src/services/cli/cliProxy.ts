@@ -24,8 +24,7 @@ export async function cliProxyStatusAll() {
   return invokeGeneratedIpc<CliProxyStatus[]>({
     title: "读取 CLI 代理状态失败",
     cmd: "cli_proxy_status_all",
-    invoke: () =>
-      commands.cliProxyStatusAll() as Promise<GeneratedCommandResult<CliProxyStatus[]>>,
+    invoke: () => commands.cliProxyStatusAll() as Promise<GeneratedCommandResult<CliProxyStatus[]>>,
   });
 }
 

@@ -69,7 +69,12 @@ export function AppStartupStatusBanner() {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          <Button size="sm" variant="secondary" onClick={handleRetry} disabled={!status.canRetry || retrying}>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={handleRetry}
+            disabled={!status.canRetry || retrying}
+          >
             {retrying ? "重试中..." : "重试启动"}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => navigate("/settings")}>

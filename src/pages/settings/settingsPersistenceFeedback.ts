@@ -15,9 +15,7 @@ type PresentSettingsMutationFeedbackInput = {
   about: AppAboutInfo | null;
 };
 
-export function presentSettingsMutationFeedback(
-  input: PresentSettingsMutationFeedbackInput
-) {
+export function presentSettingsMutationFeedback(input: PresentSettingsMutationFeedbackInput) {
   const { before, desired, after, settledKeys, result, gateway, about } = input;
   const runtime = result.runtime;
   const portSettled = settledKeys.includes("preferred_port");

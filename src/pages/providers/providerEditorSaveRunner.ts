@@ -67,15 +67,11 @@ export async function runProviderEditorSave(ctx: SaveActionContext) {
     ctx.onSaved(saved.cli_key);
     ctx.onOpenChange(false);
   } catch (err) {
-    logToConsole(
-      "error",
-      ctx.mode === "create" ? "保存 Provider 失败" : "更新 Provider 失败",
-      {
-        error: String(err),
-        cli: ctx.cliKey,
-        provider_id: ctx.mode === "edit" && ctx.editProvider ? ctx.editProvider.id : undefined,
-      }
-    );
+    logToConsole("error", ctx.mode === "create" ? "保存 Provider 失败" : "更新 Provider 失败", {
+      error: String(err),
+      cli: ctx.cliKey,
+      provider_id: ctx.mode === "edit" && ctx.editProvider ? ctx.editProvider.id : undefined,
+    });
     toast(`${ctx.mode === "create" ? "保存" : "更新"}失败：${String(err)}`);
   } finally {
     ctx.setSaving(false);

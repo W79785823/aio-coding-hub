@@ -8,7 +8,9 @@ import {
 
 describe("services/desktop/notification", () => {
   it("maps permission check results to a strict boolean", async () => {
-    vi.mocked(tauriInvoke).mockResolvedValueOnce(true as any).mockResolvedValueOnce(null);
+    vi.mocked(tauriInvoke)
+      .mockResolvedValueOnce(true as any)
+      .mockResolvedValueOnce(null);
 
     await expect(desktopNotificationIsPermissionGranted()).resolves.toBe(true);
     await expect(desktopNotificationIsPermissionGranted()).resolves.toBe(false);
@@ -56,7 +58,7 @@ describe("services/desktop/notification", () => {
         title: "Build finished",
         body: "All checks passed",
         sound: null,
-      }
+      },
     });
   });
 });

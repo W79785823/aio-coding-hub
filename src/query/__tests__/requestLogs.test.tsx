@@ -189,8 +189,7 @@ describe("query/requestLogs", () => {
       expect(res?.items?.map((row) => row.id)).toEqual([1, 2]);
     });
     expect((client.getQueryData<RequestLogSummary[]>(listKey) ?? []).map((row) => row.id)).toEqual([
-      2,
-      1,
+      2, 1,
     ]);
 
     client.setQueryData(listKey, [makeRequestLogSummary({ id: 5, created_at: 10 })]);
@@ -203,12 +202,12 @@ describe("query/requestLogs", () => {
       expect(res?.mode).toBe("incremental");
       expect(res?.items?.map((row) => row.id)).toEqual([6, 7]);
     });
-    expect((client.getQueryData<RequestLogSummary[]>(listKey) ?? []).some((row) => row.id === 6)).toBe(
-      true
-    );
-    expect((client.getQueryData<RequestLogSummary[]>(listKey) ?? []).some((row) => row.id === 7)).toBe(
-      true
-    );
+    expect(
+      (client.getQueryData<RequestLogSummary[]>(listKey) ?? []).some((row) => row.id === 6)
+    ).toBe(true);
+    expect(
+      (client.getQueryData<RequestLogSummary[]>(listKey) ?? []).some((row) => row.id === 7)
+    ).toBe(true);
 
     const nowSec2 = Math.floor(Date.now() / 1000);
     client.setQueryData(listKey, [
@@ -230,8 +229,8 @@ describe("query/requestLogs", () => {
       expect(res?.mode).toBe("incremental");
       expect(res?.items).toEqual([]);
     });
-    expect((client.getQueryData<RequestLogSummary[]>(listKey) ?? []).some((row) => row.id === 8)).toBe(
-      true
-    );
+    expect(
+      (client.getQueryData<RequestLogSummary[]>(listKey) ?? []).some((row) => row.id === 8)
+    ).toBe(true);
   });
 });

@@ -29,8 +29,7 @@ export type McpSecretPatchInput =
   | OptionalNullableGeneratedFields<GeneratedMcpSecretPatchInput>
   | Record<string, string>;
 
-type McpServerUpsertTransportInput =
-  OptionalNullableGeneratedFields<GeneratedMcpServerUpsertInput>;
+type McpServerUpsertTransportInput = OptionalNullableGeneratedFields<GeneratedMcpServerUpsertInput>;
 
 export type McpServerUpsertInput = Override<
   McpServerUpsertTransportInput,
@@ -208,10 +207,7 @@ export async function mcpParseJson(jsonText: string) {
   });
 }
 
-export async function mcpImportServers(input: {
-  workspaceId: number;
-  servers: McpImportServer[];
-}) {
+export async function mcpImportServers(input: { workspaceId: number; servers: McpImportServer[] }) {
   const payload = {
     workspaceId: input.workspaceId,
     servers: input.servers,

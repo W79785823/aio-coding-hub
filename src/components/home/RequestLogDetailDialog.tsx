@@ -14,7 +14,12 @@ import { Dialog } from "../../ui/Dialog";
 import { TabList } from "../../ui/TabList";
 import { resolveProviderLabel } from "../../pages/providers/baseUrl";
 import { resolveRequestLogErrorObservation } from "./requestLogErrorDetails";
-import { computeStatusBadge, resolveLiveTraceDurationMs, resolveLiveTraceProvider } from "./HomeLogShared";
+import {
+  buildRequestLogAuditMeta,
+  computeStatusBadge,
+  resolveLiveTraceDurationMs,
+  resolveLiveTraceProvider,
+} from "./HomeLogShared";
 import { RequestLogDetailSummaryTab } from "./RequestLogDetailSummaryTab";
 import { RequestLogDetailChainTab } from "./RequestLogDetailChainTab";
 import { RequestLogDetailRawTab } from "./RequestLogDetailRawTab";
@@ -61,7 +66,9 @@ export function RequestLogDetailDialog({
   const providerId = isInProgress
     ? (liveProvider?.providerId ?? selectedLog?.final_provider_id)
     : selectedLog?.final_provider_id;
-  const finalProviderText = resolveProviderLabel(providerName, providerId);
+  const auditMeta = selectedLog ? buildRequestLogAuditMeta(selectedLog) : null;
+  const finalProviderText =
+    auditMeta?.providerFallbackText ?? resolveProviderLabel(providerName, providerId);
   const displayDurationMs =
     selectedLog == null
       ? 0
@@ -143,9 +150,7 @@ export function RequestLogDetailDialog({
             />
           )}
 
-          {activeTab === "raw" && (
-            <RequestLogDetailRawTab selectedLog={selectedLog} />
-          )}
+          {activeTab === "raw" && <RequestLogDetailRawTab selectedLog={selectedLog} />}
         </div>
       )}
     </Dialog>

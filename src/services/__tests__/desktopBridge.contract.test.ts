@@ -9,10 +9,7 @@ const allowedRawTauriImportFiles = new Set([
   "services/tauriInvoke.ts",
 ]);
 
-const allowedRawInvokeFiles = new Set([
-  "services/tauriInvoke.ts",
-  "services/desktop/updater.ts",
-]);
+const allowedRawInvokeFiles = new Set(["services/tauriInvoke.ts", "services/desktop/updater.ts"]);
 
 const rawTauriImportPattern =
   /from\s+["']@tauri-apps\/(?:api|plugin)[^"']*["']|import\s*\(\s*["']@tauri-apps\/(?:api|plugin)[^"']*["']\s*\)/;

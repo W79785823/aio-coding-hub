@@ -5,10 +5,7 @@ import {
   setLastModelPricesSync,
   type ModelPricesSyncReport,
 } from "../../usage/modelPrices";
-import {
-  promptsDefaultSyncFromFiles,
-  type DefaultPromptSyncReport,
-} from "../../workspace/prompts";
+import { promptsDefaultSyncFromFiles, type DefaultPromptSyncReport } from "../../workspace/prompts";
 
 vi.mock("../../consoleLog", () => ({ logToConsole: vi.fn() }));
 vi.mock("../../usage/modelPrices", async () => {

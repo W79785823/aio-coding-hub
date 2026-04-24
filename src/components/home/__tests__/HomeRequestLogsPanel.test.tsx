@@ -885,7 +885,9 @@ describe("components/home/HomeRequestLogsPanel", () => {
         start_provider_name: "P1",
         final_provider_id: 1,
         final_provider_name: "P1",
-        route: [createRequestLogRouteHop({ provider_id: 1, provider_name: "P1", ok: true, status: 200 })],
+        route: [
+          createRequestLogRouteHop({ provider_id: 1, provider_name: "P1", ok: true, status: 200 }),
+        ],
         session_reuse: false,
         input_tokens: 1,
         output_tokens: 2,
@@ -1168,5 +1170,51 @@ describe("components/home/HomeRequestLogsPanel", () => {
     expect(screen.getByText("输入")).toBeInTheDocument();
     expect(screen.getAllByText("P1").length).toBeGreaterThan(0);
     expect(screen.getAllByText("fast")).toHaveLength(1);
+  });
+
+  it("labels all-provider-unavailable logs without blaming the skipped provider", () => {
+    render(
+      <MemoryRouter>
+        <HomeRequestLogsPanel
+          showCustomTooltip={true}
+          compactModeOverride={false}
+          traces={[]}
+          requestLogs={makeRequestLogs([
+            {
+              id: 77,
+              trace_id: "t-unavailable",
+              cli_key: "claude",
+              method: "POST",
+              path: "/v1/messages",
+              requested_model: "claude-sonnet-4",
+              status: 503,
+              error_code: "GW_ALL_PROVIDERS_UNAVAILABLE",
+              duration_ms: 12,
+              ttfb_ms: null,
+              attempt_count: 1,
+              has_failover: false,
+              start_provider_id: 0,
+              start_provider_name: "Unknown",
+              final_provider_id: 0,
+              final_provider_name: "Unknown",
+              route: [],
+              session_reuse: false,
+              created_at: Math.floor(Date.now() / 1000),
+            },
+          ])}
+          requestLogsLoading={false}
+          requestLogsRefreshing={false}
+          requestLogsAvailable={true}
+          onRefreshRequestLogs={vi.fn()}
+          selectedLogId={null}
+          onSelectLogId={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText("无可用供应商")).toBeInTheDocument();
+    expect(screen.getAllByText("全部不可用").length).toBeGreaterThan(0);
+    expect(screen.getByText(/网关未继续向已熔断或冷却中的供应商发起上游请求/)).toBeInTheDocument();
+    expect(screen.queryByText("Unknown")).not.toBeInTheDocument();
   });
 });

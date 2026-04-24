@@ -2,7 +2,10 @@ import { useDevPreviewData } from "../../hooks/useDevPreviewData";
 import type { UpdateMeta } from "../../hooks/useUpdateMeta";
 import { useConfigExportMutation, useConfigImportMutation } from "../../query/configMigrate";
 import { useDbDiskUsageQuery, useRequestLogsClearAllMutation } from "../../query/dataManagement";
-import { useModelPricesSyncBasellmMutation, useModelPricesTotalCountQuery } from "../../query/modelPrices";
+import {
+  useModelPricesSyncBasellmMutation,
+  useModelPricesTotalCountQuery,
+} from "../../query/modelPrices";
 import { useUsageSummaryQuery } from "../../query/usage";
 import { resolveAvailableStatus } from "./settingsSidebarModel";
 import { useSettingsSidebarController } from "./useSettingsSidebarController";

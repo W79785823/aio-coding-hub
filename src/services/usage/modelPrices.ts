@@ -131,7 +131,10 @@ export async function modelPriceAliasesSet(aliases: ModelPriceAliases) {
     cmd: "model_price_aliases_set",
     args: { aliases },
     invoke: async () =>
-      mapGeneratedCommandResponse(await commands.modelPriceAliasesSet(aliases), toModelPriceAliases),
+      mapGeneratedCommandResponse(
+        await commands.modelPriceAliasesSet(aliases),
+        toModelPriceAliases
+      ),
   });
 }
 

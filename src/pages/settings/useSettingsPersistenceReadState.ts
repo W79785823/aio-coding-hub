@@ -2,10 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { logToConsole } from "../../services/consoleLog";
 import type { AppSettings } from "../../services/settings/settings";
-import {
-  getSettingsReadProtection,
-  SETTINGS_READONLY_MESSAGE,
-} from "../../query/settings";
+import { getSettingsReadProtection, SETTINGS_READONLY_MESSAGE } from "../../query/settings";
 import {
   buildPersistedSettingsSnapshot,
   diffPersistedSettings,
@@ -26,9 +23,7 @@ type UseSettingsPersistenceReadStateInput = {
   applySnapshot: (next: PersistedSettings) => void;
 };
 
-export function useSettingsPersistenceReadState(
-  input: UseSettingsPersistenceReadStateInput
-) {
+export function useSettingsPersistenceReadState(input: UseSettingsPersistenceReadStateInput) {
   const { settingsQuery, applySnapshot } = input;
   const {
     data: settingsData,

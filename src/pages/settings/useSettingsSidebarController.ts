@@ -6,10 +6,7 @@ import { runBackgroundTask } from "../../services/backgroundTasks";
 import type { ConfigImportResult } from "../../services/app/configMigrate";
 import { appDataDirGet, appDataReset, appExit } from "../../services/app/dataManagement";
 import type { ClearRequestLogsResult } from "../../services/app/dataManagement";
-import {
-  openDesktopSinglePath,
-  saveDesktopFilePath,
-} from "../../services/desktop/dialog";
+import { openDesktopSinglePath, saveDesktopFilePath } from "../../services/desktop/dialog";
 import { openDesktopPath, openDesktopUrl } from "../../services/desktop/opener";
 import {
   getLastModelPricesSync,

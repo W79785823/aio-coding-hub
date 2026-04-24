@@ -1,10 +1,7 @@
 // Usage: Rendered by ProvidersPage when `view === "providers"`.
 
 import { Search } from "lucide-react";
-import {
-  DndContext,
-  closestCenter,
-} from "@dnd-kit/core";
+import { DndContext, closestCenter } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { ClaudeModelValidationDialog } from "../../components/ClaudeModelValidationDialog";
 import type { CliKey } from "../../services/providers/providers";

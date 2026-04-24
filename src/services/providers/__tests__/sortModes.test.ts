@@ -46,9 +46,7 @@ function makeSortModeSummary(overrides: Partial<SortModeSummary> = {}): SortMode
   };
 }
 
-function makeSortModeActiveRow(
-  overrides: Partial<SortModeActiveRow> = {}
-): SortModeActiveRow {
+function makeSortModeActiveRow(overrides: Partial<SortModeActiveRow> = {}): SortModeActiveRow {
   return {
     cli_key: "claude",
     mode_id: 1,

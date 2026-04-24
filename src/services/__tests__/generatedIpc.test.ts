@@ -89,11 +89,7 @@ describe("services/generatedIpc", () => {
       })
     ).resolves.toBe("no-update");
 
-    expect(logToConsole).not.toHaveBeenCalledWith(
-      "error",
-      "读取更新结果失败",
-      expect.anything()
-    );
+    expect(logToConsole).not.toHaveBeenCalledWith("error", "读取更新结果失败", expect.anything());
   });
 
   it("passes through raw generated command payloads without Result envelope", async () => {

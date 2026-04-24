@@ -98,6 +98,10 @@ pub(super) fn parse_attempts(attempts_json: &str) -> Vec<AttemptRow> {
 }
 
 pub(super) fn start_provider_from_attempts(attempts: &[AttemptRow]) -> (i64, String) {
+    if attempts.iter().all(|a| a.outcome == "skipped") {
+        return (0, "Unknown".to_string());
+    }
+
     let first = attempts
         .iter()
         .find(|a| a.outcome != "skipped")
@@ -110,6 +114,10 @@ pub(super) fn start_provider_from_attempts(attempts: &[AttemptRow]) -> (i64, Str
 }
 
 pub(super) fn final_provider_from_attempts(attempts: &[AttemptRow]) -> (i64, String) {
+    if attempts.iter().all(|a| a.outcome == "skipped") {
+        return (0, "Unknown".to_string());
+    }
+
     let picked = attempts
         .iter()
         .rev()
@@ -635,6 +643,26 @@ INSERT INTO request_logs (
         let (final_id, final_name) = final_provider_from_attempts(&attempts);
         assert_eq!(final_id, 2);
         assert_eq!(final_name, "B");
+    }
+
+    #[test]
+    fn start_and_final_provider_hide_gate_only_skips() {
+        let attempts = parse_attempts(
+            r#"[
+                {"provider_id":1,"provider_name":"A","outcome":"skipped","status":null,"error_code":"GW_PROVIDER_CIRCUIT_OPEN","decision":"skip","reason":"provider skipped by circuit breaker"}
+            ]"#,
+        );
+
+        let (start_id, start_name) = start_provider_from_attempts(&attempts);
+        assert_eq!(start_id, 0);
+        assert_eq!(start_name, "Unknown");
+
+        let (final_id, final_name) = final_provider_from_attempts(&attempts);
+        assert_eq!(final_id, 0);
+        assert_eq!(final_name, "Unknown");
+
+        let route = route_from_attempts(&attempts);
+        assert!(route.is_empty());
     }
 
     #[test]

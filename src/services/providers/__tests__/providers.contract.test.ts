@@ -6,9 +6,7 @@ describe("services/providers/providers contract", () => {
     expect(providersSource).toContain("type ClaudeModels as GeneratedClaudeModels");
     expect(providersSource).toContain("type DailyResetMode as GeneratedDailyResetMode");
     expect(providersSource).toContain("type ProviderAuthMode as GeneratedProviderAuthMode");
-    expect(providersSource).toContain(
-      "type ProviderBaseUrlMode as GeneratedProviderBaseUrlMode"
-    );
+    expect(providersSource).toContain("type ProviderBaseUrlMode as GeneratedProviderBaseUrlMode");
     expect(providersSource).toContain("type ProviderSummary as GeneratedProviderSummary");
     expect(providersSource).toContain("type ProviderUpsertInput as GeneratedProviderUpsertInput");
     expect(providersSource).toContain("type RemapGeneratedKeys");

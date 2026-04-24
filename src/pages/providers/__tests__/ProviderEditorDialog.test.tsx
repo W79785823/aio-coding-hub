@@ -617,9 +617,7 @@ describe("pages/providers/ProviderEditorDialog", () => {
 
     fireEvent.click(dialog.getByRole("button", { name: "保存" }));
 
-    await waitFor(() =>
-      expect(vi.mocked(toast)).toHaveBeenCalledWith("请选择源 Codex 来源")
-    );
+    await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith("请选择源 Codex 来源"));
     expect(vi.mocked(providerUpsert)).not.toHaveBeenCalled();
   });
 

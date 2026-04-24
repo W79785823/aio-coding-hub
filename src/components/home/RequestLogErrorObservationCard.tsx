@@ -20,7 +20,10 @@ export function RequestLogErrorObservationCard({
   const suggestion = observation.gwDescription?.suggestion ?? null;
 
   const detailFields = buildDetailFields(observation);
-  const hasDetails = detailFields.length > 0 || observation.upstreamBodyPreview != null || observation.rawDetailsText != null;
+  const hasDetails =
+    detailFields.length > 0 ||
+    observation.upstreamBodyPreview != null ||
+    observation.rawDetailsText != null;
 
   return (
     <Card padding="sm">
@@ -116,7 +119,8 @@ type DetailField = { label: string; value: string };
 function buildDetailFields(obs: RequestLogErrorObservation): DetailField[] {
   const fields: DetailField[] = [];
   if (obs.errorCategory) fields.push({ label: "错误分类", value: obs.errorCategory });
-  if (obs.upstreamStatus != null) fields.push({ label: "上游状态码", value: String(obs.upstreamStatus) });
+  if (obs.upstreamStatus != null)
+    fields.push({ label: "上游状态码", value: String(obs.upstreamStatus) });
   if (obs.decision) fields.push({ label: "决策", value: obs.decision });
   if (obs.selectionMethod) fields.push({ label: "选择方式", value: obs.selectionMethod });
   if (obs.reasonCode) fields.push({ label: "原因码", value: obs.reasonCode });
@@ -137,7 +141,9 @@ function buildDetailFields(obs: RequestLogErrorObservation): DetailField[] {
     fields.push({ label: "熔断器", value: parts.join(" ") });
   }
   if (obs.providerId != null) {
-    const providerText = obs.providerName ? `${obs.providerName} (id=${obs.providerId})` : `id=${obs.providerId}`;
+    const providerText = obs.providerName
+      ? `${obs.providerName} (id=${obs.providerId})`
+      : `id=${obs.providerId}`;
     fields.push({ label: "供应商", value: providerText });
   }
   return fields;

@@ -81,7 +81,7 @@ describe("cross-layer contracts", () => {
 
   it("keeps request detail events gated behind the summary signal path", () => {
     expect(gatewayEventsSource).toContain("emit_request_signal(");
-    expect(gatewayEventsSource).toContain('if !should_emit_gateway_detail_event(app) {');
+    expect(gatewayEventsSource).toContain("if !should_emit_gateway_detail_event(app) {");
     expect(gatewayEventsSource).toMatch(
       /emit_request_signal\([\s\S]+?if !should_emit_gateway_detail_event\(app\) \{\s+return;\s+\}/
     );

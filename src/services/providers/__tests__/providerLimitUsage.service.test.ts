@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { commands } from "../../../generated/bindings";
 import { logToConsole } from "../../consoleLog";
-import {
-  providerLimitUsageV1,
-  type ProviderLimitUsageRow,
-} from "../providerLimitUsage";
+import { providerLimitUsageV1, type ProviderLimitUsageRow } from "../providerLimitUsage";
 
 vi.mock("../../../generated/bindings", async () => {
   const actual = await vi.importActual<typeof import("../../../generated/bindings")>(
@@ -57,7 +54,9 @@ vi.mock("../../consoleLog", async () => {
 
 describe("services/providers/providerLimitUsage", () => {
   it("rethrows invoke errors and logs", async () => {
-    vi.mocked(commands.providerLimitUsageV1).mockRejectedValueOnce(new Error("provider limit boom"));
+    vi.mocked(commands.providerLimitUsageV1).mockRejectedValueOnce(
+      new Error("provider limit boom")
+    );
 
     await expect(providerLimitUsageV1("claude")).rejects.toThrow("provider limit boom");
     expect(logToConsole).toHaveBeenCalledWith(

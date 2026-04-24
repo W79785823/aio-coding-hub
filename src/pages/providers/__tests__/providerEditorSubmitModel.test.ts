@@ -3,7 +3,9 @@ import { DEFAULT_FORM_VALUES } from "../providerEditorUtils";
 import { buildProviderEditorUpsertInput } from "../providerEditorSubmitModel";
 import type { ProviderEditorPayloadContext } from "../providerEditorActionContext";
 
-function makeContext(overrides: Partial<ProviderEditorPayloadContext> = {}): ProviderEditorPayloadContext {
+function makeContext(
+  overrides: Partial<ProviderEditorPayloadContext> = {}
+): ProviderEditorPayloadContext {
   return {
     mode: "create",
     cliKey: "claude",

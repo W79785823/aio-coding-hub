@@ -147,7 +147,10 @@ function createImportReport(overrides: Partial<McpImportReport> = {}): McpImport
   };
 }
 
-type ListQueryMock = Pick<ReturnType<typeof useMcpServersListQuery>, "data" | "isFetching" | "error">;
+type ListQueryMock = Pick<
+  ReturnType<typeof useMcpServersListQuery>,
+  "data" | "isFetching" | "error"
+>;
 type ToggleMutationMock = Pick<
   ReturnType<typeof useMcpServerSetEnabledMutation>,
   "isPending" | "mutateAsync"

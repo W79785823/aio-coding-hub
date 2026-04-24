@@ -62,7 +62,10 @@ vi.mock("../app/startupStatusStore", () => ({
 }));
 
 import { listenAppHeartbeat } from "../services/app/appHeartbeat";
-import { listenAppStartupStatusSnapshot, syncAppStartupStatusSnapshot } from "../app/startupStatusStore";
+import {
+  listenAppStartupStatusSnapshot,
+  syncAppStartupStatusSnapshot,
+} from "../app/startupStatusStore";
 import {
   registerBackgroundTask,
   setBackgroundTaskSchedulerForeground,
@@ -78,7 +81,10 @@ import {
 import { listenTaskCompleteNotifyEvents } from "../services/notification/taskCompleteNotifyEvents";
 import { updateCheckNow } from "../hooks/useUpdateMeta";
 import { cliProxyStatusAll } from "../services/cli/cliProxy";
-import { applySettingsRuntimeSnapshot, resetSettingsRuntimeController } from "../app/settingsRuntimeController";
+import {
+  applySettingsRuntimeSnapshot,
+  resetSettingsRuntimeController,
+} from "../app/settingsRuntimeController";
 
 async function renderApp() {
   const { default: App } = await import("../App");

@@ -11,8 +11,7 @@ export async function appHeartbeatPong() {
   return invokeGeneratedIpc<boolean>({
     title: "应用心跳响应失败",
     cmd: "app_heartbeat_pong",
-    invoke: () =>
-      commands.appHeartbeatPong() as Promise<GeneratedCommandResult<boolean>>,
+    invoke: () => commands.appHeartbeatPong() as Promise<GeneratedCommandResult<boolean>>,
   });
 }
 

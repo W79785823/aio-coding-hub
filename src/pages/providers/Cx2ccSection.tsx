@@ -133,9 +133,7 @@ function Cx2ccProviderSourceInfo(props: {
     <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-400">
       <p>
         已选择
-        <span className="mx-1 font-medium text-slate-700 dark:text-slate-200">
-          {provider.name}
-        </span>
+        <span className="mx-1 font-medium text-slate-700 dark:text-slate-200">{provider.name}</span>
       </p>
       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] leading-5">
         <span>

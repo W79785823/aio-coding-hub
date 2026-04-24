@@ -12,9 +12,7 @@ import {
   type WslTargetCli,
 } from "../../generated/bindings";
 import { invokeGeneratedIpc, type GeneratedCommandResult } from "../generatedIpc";
-import {
-  type OptionalNullableGeneratedFields,
-} from "../generatedTypeUtils";
+import { type OptionalNullableGeneratedFields } from "../generatedTypeUtils";
 
 export type {
   CodexHomeMode,
@@ -138,8 +136,9 @@ export function pickSettingsSetInputFieldsFromView<
 
   for (const key of keys) {
     const inputKey = key as TKeys[number];
-    const sourceKey =
-      SETTINGS_VIEW_TO_UPDATE_FIELD_MAP[inputKey] as (typeof SETTINGS_VIEW_TO_UPDATE_FIELD_MAP)[TKeys[number]];
+    const sourceKey = SETTINGS_VIEW_TO_UPDATE_FIELD_MAP[
+      inputKey
+    ] as (typeof SETTINGS_VIEW_TO_UPDATE_FIELD_MAP)[TKeys[number]];
     next[inputKey] = source[sourceKey] as unknown as SettingsSetInput[TKeys[number]];
   }
 

@@ -33,8 +33,7 @@ export function ApiKeySection(props: { form: UseProviderEditorFormReturn }) {
     copyApiKey,
   } = props.form;
 
-  const canCopyApiKey =
-    Boolean(apiKeyValue.trim()) || (mode === "edit" && apiKeyConfigured);
+  const canCopyApiKey = Boolean(apiKeyValue.trim()) || (mode === "edit" && apiKeyConfigured);
   const apiKeyHint =
     mode === "edit"
       ? apiKeyConfigured

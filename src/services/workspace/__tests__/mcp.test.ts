@@ -42,9 +42,7 @@ vi.mock("../../consoleLog", async () => {
   };
 });
 
-function makeMcpServerSummary(
-  overrides: Partial<McpServerSummary> = {}
-): McpServerSummary {
+function makeMcpServerSummary(overrides: Partial<McpServerSummary> = {}): McpServerSummary {
   return {
     id: 1,
     server_key: "fetch",
@@ -63,9 +61,7 @@ function makeMcpServerSummary(
   };
 }
 
-function makeMcpImportServer(
-  overrides: Partial<McpImportServer> = {}
-): McpImportServer {
+function makeMcpImportServer(overrides: Partial<McpImportServer> = {}): McpImportServer {
   return {
     server_key: "fetch",
     name: "Fetch",
@@ -81,18 +77,14 @@ function makeMcpImportServer(
   };
 }
 
-function makeMcpParseResult(
-  overrides: Partial<McpParseResult> = {}
-): McpParseResult {
+function makeMcpParseResult(overrides: Partial<McpParseResult> = {}): McpParseResult {
   return {
     servers: [makeMcpImportServer()],
     ...overrides,
   };
 }
 
-function makeMcpImportReport(
-  overrides: Partial<McpImportReport> = {}
-): McpImportReport {
+function makeMcpImportReport(overrides: Partial<McpImportReport> = {}): McpImportReport {
   return {
     inserted: 0,
     updated: 0,

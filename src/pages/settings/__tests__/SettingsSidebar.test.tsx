@@ -10,10 +10,7 @@ import {
   useModelPricesSyncBasellmMutation,
   useModelPricesTotalCountQuery,
 } from "../../../query/modelPrices";
-import {
-  useConfigExportMutation,
-  useConfigImportMutation,
-} from "../../../query/configMigrate";
+import { useConfigExportMutation, useConfigImportMutation } from "../../../query/configMigrate";
 import { useUsageSummaryQuery } from "../../../query/usage";
 import { useDbDiskUsageQuery, useRequestLogsClearAllMutation } from "../../../query/dataManagement";
 import { appDataDirGet, appDataReset, appExit } from "../../../services/app/dataManagement";
@@ -155,11 +152,7 @@ vi.mock("../SettingsDataSyncCard", () => ({
 }));
 
 vi.mock("../SettingsDialogs", () => ({
-  SettingsDialogs: ({
-    clearRequestLogs,
-    resetAll,
-    configImport,
-  }: any) => (
+  SettingsDialogs: ({ clearRequestLogs, resetAll, configImport }: any) => (
     <div>
       <div>clearOpen:{String(clearRequestLogs.open)}</div>
       <div>resetOpen:{String(resetAll.open)}</div>
@@ -330,7 +323,9 @@ describe("pages/settings/SettingsSidebar", () => {
       .mockRejectedValueOnce(new Error("clear boom"));
     vi.mocked(useRequestLogsClearAllMutation).mockReturnValue(clearMutation as any);
 
-    vi.mocked(appDataDirGet).mockResolvedValueOnce(null as any).mockResolvedValueOnce("/tmp/app-data");
+    vi.mocked(appDataDirGet)
+      .mockResolvedValueOnce(null as any)
+      .mockResolvedValueOnce("/tmp/app-data");
     vi.mocked(tauriOpenPath)
       .mockRejectedValueOnce(new Error("open boom"))
       .mockResolvedValueOnce(undefined as any);

@@ -95,8 +95,7 @@ export function useMcpImportServersMutation(workspaceId: number) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (servers: McpImportServer[]) =>
-      mcpImportServers({ workspaceId, servers }),
+    mutationFn: async (servers: McpImportServer[]) => mcpImportServers({ workspaceId, servers }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: mcpKeys.serversList(workspaceId) });
     },

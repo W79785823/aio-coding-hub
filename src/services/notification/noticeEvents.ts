@@ -27,33 +27,36 @@ export type NoticeEventPayload = {
 };
 
 export async function listenNoticeEvents(): Promise<() => void> {
-  const unlisten = await listenDesktopEvent<NoticeEventPayload>(appEventNames.notice, async (payload) => {
-    if (!payload) return;
+  const unlisten = await listenDesktopEvent<NoticeEventPayload>(
+    appEventNames.notice,
+    async (payload) => {
+      if (!payload) return;
 
-    try {
-      const permissionGranted = await desktopNotificationIsPermissionGranted();
-      if (!permissionGranted) return;
+      try {
+        const permissionGranted = await desktopNotificationIsPermissionGranted();
+        if (!permissionGranted) return;
 
-      if (getNotificationSoundEnabled()) {
-        // Custom sound enabled: play ding.mp3 and send silent notification (no sound param)
-        playNotificationSound();
-        await desktopNotificationNotify({ title: payload.title, body: payload.body });
-      } else {
-        // Custom sound disabled: normal system notification with default sound
-        await desktopNotificationNotify({
+        if (getNotificationSoundEnabled()) {
+          // Custom sound enabled: play ding.mp3 and send silent notification (no sound param)
+          playNotificationSound();
+          await desktopNotificationNotify({ title: payload.title, body: payload.body });
+        } else {
+          // Custom sound disabled: normal system notification with default sound
+          await desktopNotificationNotify({
+            title: payload.title,
+            body: payload.body,
+            sound: "default",
+          });
+        }
+      } catch (err) {
+        logToConsole("error", "发送系统通知失败", {
+          error: String(err),
+          level: payload.level,
           title: payload.title,
-          body: payload.body,
-          sound: "default",
         });
       }
-    } catch (err) {
-      logToConsole("error", "发送系统通知失败", {
-        error: String(err),
-        level: payload.level,
-        title: payload.title,
-      });
     }
-  });
+  );
 
   return () => {
     unlisten();

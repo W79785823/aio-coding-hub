@@ -101,10 +101,7 @@ export function persistedSettingValuesEqual(
   right: PersistedSettings[PersistKey]
 ) {
   if (Array.isArray(left) && Array.isArray(right)) {
-    return (
-      left.length === right.length &&
-      left.every((item, index) => item === right[index])
-    );
+    return left.length === right.length && left.every((item, index) => item === right[index]);
   }
 
   return left === right;
@@ -193,33 +190,25 @@ export function buildPersistedSettingsSnapshot(
     response_fixer_fix_sse_format:
       settingsValue.response_fixer_fix_sse_format ?? fallback.response_fixer_fix_sse_format,
     response_fixer_fix_truncated_json:
-      settingsValue.response_fixer_fix_truncated_json ??
-      fallback.response_fixer_fix_truncated_json,
+      settingsValue.response_fixer_fix_truncated_json ?? fallback.response_fixer_fix_truncated_json,
     failover_max_attempts_per_provider:
       settingsValue.failover_max_attempts_per_provider ??
       fallback.failover_max_attempts_per_provider,
     failover_max_providers_to_try:
-      settingsValue.failover_max_providers_to_try ??
-      fallback.failover_max_providers_to_try,
+      settingsValue.failover_max_providers_to_try ?? fallback.failover_max_providers_to_try,
     circuit_breaker_failure_threshold:
-      settingsValue.circuit_breaker_failure_threshold ??
-      fallback.circuit_breaker_failure_threshold,
+      settingsValue.circuit_breaker_failure_threshold ?? fallback.circuit_breaker_failure_threshold,
     circuit_breaker_open_duration_minutes:
       settingsValue.circuit_breaker_open_duration_minutes ??
       fallback.circuit_breaker_open_duration_minutes,
   };
 }
 
-export function buildPersistedSettingsMutationInput(
-  desired: PersistedSettings
-): SettingsSetInput {
+export function buildPersistedSettingsMutationInput(desired: PersistedSettings): SettingsSetInput {
   return pickSettingsSetInputFieldsFromView(desired, PERSISTED_SETTINGS_INPUT_KEYS);
 }
 
-export function validatePersistedSettings(
-  desired: PersistedSettings,
-  keys: PersistKey[]
-) {
+export function validatePersistedSettings(desired: PersistedSettings, keys: PersistKey[]) {
   if (keys.includes("preferred_port")) {
     if (
       !Number.isFinite(desired.preferred_port) ||

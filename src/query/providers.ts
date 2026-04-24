@@ -121,17 +121,21 @@ export function useProviderDeleteMutation() {
 export function useProvidersReorderMutation() {
   const queryClient = useQueryClient();
 
-  return useMutation<ProviderSummary[] | null, Error, {
-    cliKey: CliKey;
-    orderedProviderIds: number[];
-    optimisticProviders?: ProviderSummary[];
-  }, { previousProviders: ProviderSummary[] | null | undefined }>({
+  return useMutation<
+    ProviderSummary[] | null,
+    Error,
+    {
+      cliKey: CliKey;
+      orderedProviderIds: number[];
+      optimisticProviders?: ProviderSummary[];
+    },
+    { previousProviders: ProviderSummary[] | null | undefined }
+  >({
     mutationFn: (input: {
       cliKey: CliKey;
       orderedProviderIds: number[];
       optimisticProviders?: ProviderSummary[];
-    }) =>
-      providersReorder(input.cliKey, input.orderedProviderIds),
+    }) => providersReorder(input.cliKey, input.orderedProviderIds),
     onMutate: async (input) => {
       await queryClient.cancelQueries({ queryKey: providersKeys.list(input.cliKey) });
       const previousProviders = queryClient.getQueryData<ProviderSummary[] | null>(

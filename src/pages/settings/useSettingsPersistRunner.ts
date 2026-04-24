@@ -3,14 +3,8 @@ import { toast } from "sonner";
 import type { MutableRefObject } from "react";
 import type { AppAboutInfo } from "../../services/app/appAbout";
 import { logToConsole } from "../../services/consoleLog";
-import {
-  gatewayCheckPortAvailable,
-  type GatewayStatus,
-} from "../../services/gateway/gateway";
-import type {
-  SettingsMutationResult,
-  SettingsSetInput,
-} from "../../services/settings/settings";
+import { gatewayCheckPortAvailable, type GatewayStatus } from "../../services/gateway/gateway";
+import type { SettingsMutationResult, SettingsSetInput } from "../../services/settings/settings";
 import { SETTINGS_READONLY_MESSAGE } from "../../query/settings";
 import { presentSettingsMutationFeedback } from "./settingsPersistenceFeedback";
 import {
@@ -48,10 +42,7 @@ type UseSettingsPersistRunnerInput = {
     settledKeys: PersistKey[]
   ) => void;
   revertKeys: (keys: PersistKey[], source: PersistedSettings) => void;
-  setField: <TKey extends PersistKey>(
-    key: TKey,
-    value: PersistedSettings[TKey]
-  ) => void;
+  setField: <TKey extends PersistKey>(key: TKey, value: PersistedSettings[TKey]) => void;
 };
 
 export function useSettingsPersistRunner(input: UseSettingsPersistRunnerInput) {

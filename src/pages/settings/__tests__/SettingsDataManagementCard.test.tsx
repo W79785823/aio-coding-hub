@@ -64,22 +64,12 @@ describe("pages/settings/SettingsDataManagementCard", () => {
   });
 
   it("displays loading state when checking disk usage", () => {
-    render(
-      <SettingsDataManagementCard
-        {...defaultProps}
-        dbDiskUsageAvailable="checking"
-      />
-    );
+    render(<SettingsDataManagementCard {...defaultProps} dbDiskUsageAvailable="checking" />);
     expect(screen.getByText("加载中…")).toBeInTheDocument();
   });
 
   it("displays dash when disk usage unavailable", () => {
-    render(
-      <SettingsDataManagementCard
-        {...defaultProps}
-        dbDiskUsageAvailable="unavailable"
-      />
-    );
+    render(<SettingsDataManagementCard {...defaultProps} dbDiskUsageAvailable="unavailable" />);
     expect(screen.getByText("—")).toBeInTheDocument();
   });
 
@@ -149,20 +139,13 @@ describe("pages/settings/SettingsDataManagementCard", () => {
   });
 
   it("disables refresh button when checking disk usage", () => {
-    render(
-      <SettingsDataManagementCard
-        {...defaultProps}
-        dbDiskUsageAvailable="checking"
-      />
-    );
+    render(<SettingsDataManagementCard {...defaultProps} dbDiskUsageAvailable="checking" />);
 
     expect(screen.getByText("刷新")).toBeDisabled();
   });
 
   it("renders warning message about sensitive data in export", () => {
     render(<SettingsDataManagementCard {...defaultProps} />);
-    expect(
-      screen.getByText("包含 API Key 等敏感信息，请妥善保管")
-    ).toBeInTheDocument();
+    expect(screen.getByText("包含 API Key 等敏感信息，请妥善保管")).toBeInTheDocument();
   });
 });

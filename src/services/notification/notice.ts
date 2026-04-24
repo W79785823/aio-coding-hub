@@ -28,7 +28,6 @@ export async function noticeSend(params: NoticeSendParams): Promise<boolean> {
     title: "发送系统通知失败",
     cmd: "notice_send",
     args: { input },
-    invoke: () =>
-      commands.noticeSend(input) as Promise<GeneratedCommandResult<boolean>>,
+    invoke: () => commands.noticeSend(input) as Promise<GeneratedCommandResult<boolean>>,
   });
 }

@@ -102,8 +102,9 @@ export async function requestLogsListAfterIdAll(afterId: number, limit?: number)
     cmd: "request_logs_list_after_id_all",
     args: { afterId, limit: limit ?? null },
     invoke: async () =>
-      mapGeneratedCommandResponse(await commands.requestLogsListAfterIdAll(afterId, limit ?? null), (rows) =>
-        rows.map(toRequestLogSummary)
+      mapGeneratedCommandResponse(
+        await commands.requestLogsListAfterIdAll(afterId, limit ?? null),
+        (rows) => rows.map(toRequestLogSummary)
       ),
   });
 }
@@ -138,8 +139,9 @@ export async function requestAttemptLogsByTraceId(traceId: string, limit?: numbe
     cmd: "request_attempt_logs_by_trace_id",
     args: { traceId, limit: limit ?? null },
     invoke: async () =>
-      mapGeneratedCommandResponse(await commands.requestAttemptLogsByTraceId(traceId, limit ?? null), (rows) =>
-        rows.map(toRequestAttemptLog)
+      mapGeneratedCommandResponse(
+        await commands.requestAttemptLogsByTraceId(traceId, limit ?? null),
+        (rows) => rows.map(toRequestAttemptLog)
       ),
   });
 }

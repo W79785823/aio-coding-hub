@@ -8,7 +8,6 @@ export async function setDesktopWindowTheme(theme: DesktopTheme) {
     title: "同步窗口主题失败",
     cmd: "desktop_window_set_theme",
     args: { theme },
-    invoke: () =>
-      commands.desktopWindowSetTheme(theme) as Promise<GeneratedCommandResult<boolean>>,
+    invoke: () => commands.desktopWindowSetTheme(theme) as Promise<GeneratedCommandResult<boolean>>,
   });
 }

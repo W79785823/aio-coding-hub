@@ -1,9 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { AppStartupStatus } from "../services/app/startupStatus";
-import {
-  appStartupStatusGet,
-  listenAppStartupStatusEvents,
-} from "../services/app/startupStatus";
+import { appStartupStatusGet, listenAppStartupStatusEvents } from "../services/app/startupStatus";
 
 const IDLE_STARTUP_STATUS: AppStartupStatus = Object.freeze({
   running: false,
@@ -51,9 +48,5 @@ export async function listenAppStartupStatusSnapshot(): Promise<() => void> {
 }
 
 export function useAppStartupStatus(): AppStartupStatus {
-  return useSyncExternalStore(
-    subscribe,
-    getAppStartupStatusSnapshot,
-    getAppStartupStatusSnapshot
-  );
+  return useSyncExternalStore(subscribe, getAppStartupStatusSnapshot, getAppStartupStatusSnapshot);
 }

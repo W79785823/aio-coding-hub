@@ -165,13 +165,17 @@ describe("query/cost", () => {
 
     renderHook(
       () =>
-        useCostAnalyticsV1Query("daily", {
-          startTs: null,
-          endTs: null,
-          cliKey: "claude",
-          providerId: null,
-          model: null,
-        }, { enabled: false }),
+        useCostAnalyticsV1Query(
+          "daily",
+          {
+            startTs: null,
+            endTs: null,
+            cliKey: "claude",
+            providerId: null,
+            model: null,
+          },
+          { enabled: false }
+        ),
       { wrapper }
     );
 

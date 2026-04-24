@@ -16,9 +16,7 @@ export type DesktopSingleOpenDialogOptions = Omit<DesktopOpenDialogOptions, "mul
   multiple?: false | null;
 };
 
-function normalizeOpenDialogOptions(
-  options: DesktopOpenDialogOptions
-): DesktopDialogOpenRequest {
+function normalizeOpenDialogOptions(options: DesktopOpenDialogOptions): DesktopDialogOpenRequest {
   return {
     title: options.title ?? null,
     filters: options.filters ?? null,
@@ -32,9 +30,7 @@ function normalizeOpenDialogOptions(
   };
 }
 
-function normalizeSaveDialogOptions(
-  options: DesktopSaveDialogOptions
-): DesktopDialogSaveRequest {
+function normalizeSaveDialogOptions(options: DesktopSaveDialogOptions): DesktopDialogSaveRequest {
   return {
     title: options.title ?? null,
     filters: options.filters ?? null,

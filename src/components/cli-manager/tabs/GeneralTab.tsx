@@ -889,10 +889,7 @@ function UpstreamProxySettingsCard({
             </Button>
           </div>
         </SettingsRow>
-        <SettingsRow
-          label="用户名"
-          subtitle="可选。建议在此填写，而不是把用户名写进 URL。"
-        >
+        <SettingsRow label="用户名" subtitle="可选。建议在此填写，而不是把用户名写进 URL。">
           <Input
             type="text"
             value={proxyUsername}
@@ -910,10 +907,7 @@ function UpstreamProxySettingsCard({
             disabled={disabled}
           />
         </SettingsRow>
-        <SettingsRow
-          label="密码"
-          subtitle="可选。密码会单独保存，不需要手动写进代理 URL。"
-        >
+        <SettingsRow label="密码" subtitle="可选。密码会单独保存，不需要手动写进代理 URL。">
           <Input
             type="password"
             value={proxyPassword}

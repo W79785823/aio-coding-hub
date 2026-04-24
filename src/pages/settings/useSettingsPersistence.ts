@@ -2,13 +2,8 @@ import { useCallback } from "react";
 import type { AppAboutInfo } from "../../services/app/appAbout";
 import type { CliKey } from "../../services/providers/providers";
 import type { GatewayStatus } from "../../services/gateway/gateway";
-import {
-  useSettingsQuery,
-  useSettingsSetMutation,
-} from "../../query/settings";
-import {
-  type PersistedSettings,
-} from "./settingsPersistenceModel";
+import { useSettingsQuery, useSettingsSetMutation } from "../../query/settings";
+import { type PersistedSettings } from "./settingsPersistenceModel";
 import { useSettingsFormController } from "./useSettingsFormController";
 import { useSettingsPersistenceReadState } from "./useSettingsPersistenceReadState";
 import { useSettingsPersistRunner } from "./useSettingsPersistRunner";
@@ -21,13 +16,8 @@ export function useSettingsPersistence(options: {
 
   const settingsQuery = useSettingsQuery();
   const settingsSetMutation = useSettingsSetMutation();
-  const {
-    draft,
-    applySnapshot,
-    setField,
-    revertKeys,
-    reconcileSettledKeys,
-  } = useSettingsFormController();
+  const { draft, applySnapshot, setField, revertKeys, reconcileSettledKeys } =
+    useSettingsFormController();
   const {
     settingsReady,
     settingsReadErrorMessage,
@@ -63,33 +53,60 @@ export function useSettingsPersistence(options: {
     setField,
   });
 
-  const setPort = useCallback((next: number) => {
-    setField("preferred_port", next);
-  }, [setField]);
-  const setShowHomeHeatmap = useCallback((next: boolean) => {
-    setField("show_home_heatmap", next);
-  }, [setField]);
-  const setShowHomeUsage = useCallback((next: boolean) => {
-    setField("show_home_usage", next);
-  }, [setField]);
-  const setHomeUsagePeriod = useCallback((next: PersistedSettings["home_usage_period"]) => {
-    setField("home_usage_period", next);
-  }, [setField]);
-  const setCliPriorityOrder = useCallback((next: CliKey[]) => {
-    setField("cli_priority_order", next);
-  }, [setField]);
-  const setAutoStart = useCallback((next: boolean) => {
-    setField("auto_start", next);
-  }, [setField]);
-  const setStartMinimized = useCallback((next: boolean) => {
-    setField("start_minimized", next);
-  }, [setField]);
-  const setTrayEnabled = useCallback((next: boolean) => {
-    setField("tray_enabled", next);
-  }, [setField]);
-  const setLogRetentionDays = useCallback((next: number) => {
-    setField("log_retention_days", next);
-  }, [setField]);
+  const setPort = useCallback(
+    (next: number) => {
+      setField("preferred_port", next);
+    },
+    [setField]
+  );
+  const setShowHomeHeatmap = useCallback(
+    (next: boolean) => {
+      setField("show_home_heatmap", next);
+    },
+    [setField]
+  );
+  const setShowHomeUsage = useCallback(
+    (next: boolean) => {
+      setField("show_home_usage", next);
+    },
+    [setField]
+  );
+  const setHomeUsagePeriod = useCallback(
+    (next: PersistedSettings["home_usage_period"]) => {
+      setField("home_usage_period", next);
+    },
+    [setField]
+  );
+  const setCliPriorityOrder = useCallback(
+    (next: CliKey[]) => {
+      setField("cli_priority_order", next);
+    },
+    [setField]
+  );
+  const setAutoStart = useCallback(
+    (next: boolean) => {
+      setField("auto_start", next);
+    },
+    [setField]
+  );
+  const setStartMinimized = useCallback(
+    (next: boolean) => {
+      setField("start_minimized", next);
+    },
+    [setField]
+  );
+  const setTrayEnabled = useCallback(
+    (next: boolean) => {
+      setField("tray_enabled", next);
+    },
+    [setField]
+  );
+  const setLogRetentionDays = useCallback(
+    (next: number) => {
+      setField("log_retention_days", next);
+    },
+    [setField]
+  );
 
   return {
     settingsReady,

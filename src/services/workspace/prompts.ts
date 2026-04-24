@@ -57,10 +57,7 @@ function toCliKey(value: string, label: string): CliKey {
   return narrowGeneratedStringUnion(value, CLI_KEY_VALUES, label);
 }
 
-function toDefaultPromptSyncAction(
-  value: string,
-  label: string
-): DefaultPromptSyncAction {
+function toDefaultPromptSyncAction(value: string, label: string): DefaultPromptSyncAction {
   return narrowGeneratedStringUnion(value, DEFAULT_PROMPT_SYNC_ACTION_VALUES, label);
 }
 
@@ -75,10 +72,7 @@ function toDefaultPromptSyncItem(value: GeneratedDefaultPromptSyncItem): Default
   return {
     ...value,
     cli_key: toCliKey(value.cli_key, "prompts_default_sync_from_files.cli_key"),
-    action: toDefaultPromptSyncAction(
-      value.action,
-      "prompts_default_sync_from_files.action"
-    ),
+    action: toDefaultPromptSyncAction(value.action, "prompts_default_sync_from_files.action"),
   };
 }
 
@@ -108,7 +102,10 @@ export async function promptsDefaultSyncFromFiles() {
     title: "同步默认提示词失败",
     cmd: "prompts_default_sync_from_files",
     invoke: async () =>
-      mapGeneratedCommandResponse(await commands.promptsDefaultSyncFromFiles(), toDefaultPromptSyncReport),
+      mapGeneratedCommandResponse(
+        await commands.promptsDefaultSyncFromFiles(),
+        toDefaultPromptSyncReport
+      ),
   });
 }
 
@@ -146,7 +143,10 @@ export async function promptSetEnabled(promptId: number, enabled: boolean) {
       enabled,
     },
     invoke: async () =>
-      mapGeneratedCommandResponse(await commands.promptSetEnabled(promptId, enabled), toPromptSummary),
+      mapGeneratedCommandResponse(
+        await commands.promptSetEnabled(promptId, enabled),
+        toPromptSummary
+      ),
   });
 }
 

@@ -108,9 +108,7 @@ function makeCostScatterRow(
   };
 }
 
-function makeCostTopRequestRow(
-  overrides: Partial<CostTopRequestRowV1> = {}
-): CostTopRequestRowV1 {
+function makeCostTopRequestRow(overrides: Partial<CostTopRequestRowV1> = {}): CostTopRequestRowV1 {
   return {
     log_id: 1,
     trace_id: "trace-1",

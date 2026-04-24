@@ -2,10 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { CliManagerClaudeTab } from "../ClaudeTab";
-import type {
-  ClaudeCliInfo,
-  ClaudeSettingsState,
-} from "../../../../services/cli/cliManager";
+import type { ClaudeCliInfo, ClaudeSettingsState } from "../../../../services/cli/cliManager";
 
 type ClaudeInfoOverride = Omit<
   Partial<ClaudeCliInfo>,
@@ -55,9 +52,7 @@ function createClaudeInfo(overrides: ClaudeInfoOverride = {}): ClaudeCliInfo {
   } as ClaudeCliInfo;
 }
 
-function createClaudeSettings(
-  overrides: ClaudeSettingsOverride = {}
-): ClaudeSettingsState {
+function createClaudeSettings(overrides: ClaudeSettingsOverride = {}): ClaudeSettingsState {
   return {
     exists: true,
     config_dir: "/home/user/.claude",

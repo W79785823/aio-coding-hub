@@ -48,7 +48,10 @@ describe("services/cli/cliProxy", () => {
   });
 
   it("treats null invoke result as error with runtime", async () => {
-    vi.mocked(commands.cliProxyStatusAll).mockResolvedValueOnce({ status: "ok", data: null as any });
+    vi.mocked(commands.cliProxyStatusAll).mockResolvedValueOnce({
+      status: "ok",
+      data: null as any,
+    });
 
     await expect(cliProxyStatusAll()).rejects.toThrow("IPC_NULL_RESULT: cli_proxy_status_all");
   });

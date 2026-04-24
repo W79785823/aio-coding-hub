@@ -352,7 +352,10 @@ function AttemptCard({
         {expanded && (
           <div className="px-4 pb-4 space-y-3 border-t border-slate-100 dark:border-slate-700/50 pt-3">
             <div className="text-sm text-slate-500 dark:text-slate-400">
-              Provider ID: <span className="font-semibold text-slate-800 dark:text-slate-200">{attempt.provider_id}</span>
+              Provider ID:{" "}
+              <span className="font-semibold text-slate-800 dark:text-slate-200">
+                {attempt.provider_id}
+              </span>
             </div>
 
             {/* Decision tags */}
@@ -412,30 +415,43 @@ function AttemptCard({
                   {attempt.error_category ? (
                     <div className="flex items-baseline gap-2">
                       <span className="shrink-0 text-slate-500 dark:text-slate-400">错误分类:</span>
-                      <span className="font-mono text-slate-700 dark:text-slate-300">{attempt.error_category}</span>
+                      <span className="font-mono text-slate-700 dark:text-slate-300">
+                        {attempt.error_category}
+                      </span>
                     </div>
                   ) : null}
                   {attempt.decision ? (
                     <div className="flex items-baseline gap-2">
                       <span className="shrink-0 text-slate-500 dark:text-slate-400">决策:</span>
-                      <span className="font-mono text-slate-700 dark:text-slate-300">{attempt.decision}</span>
+                      <span className="font-mono text-slate-700 dark:text-slate-300">
+                        {attempt.decision}
+                      </span>
                     </div>
                   ) : null}
                   {attempt.selection_method ? (
                     <div className="flex items-baseline gap-2">
                       <span className="shrink-0 text-slate-500 dark:text-slate-400">选择方式:</span>
-                      <span className="font-mono text-slate-700 dark:text-slate-300">{attempt.selection_method}</span>
+                      <span className="font-mono text-slate-700 dark:text-slate-300">
+                        {attempt.selection_method}
+                      </span>
                     </div>
                   ) : null}
                   {hasCircuitBreaker ? (
                     <div className="flex items-baseline gap-2">
-                      <span className="shrink-0 text-slate-500 dark:text-slate-400">熔断器变化:</span>
+                      <span className="shrink-0 text-slate-500 dark:text-slate-400">
+                        熔断器变化:
+                      </span>
                       <span className="font-mono text-slate-700 dark:text-slate-300">
                         {attempt.circuit_state_before ?? "—"}
-                        {attempt.circuit_state_after && attempt.circuit_state_after !== attempt.circuit_state_before ? (
-                          <> <ArrowRight className="inline h-3 w-3" /> {attempt.circuit_state_after}</>
+                        {attempt.circuit_state_after &&
+                        attempt.circuit_state_after !== attempt.circuit_state_before ? (
+                          <>
+                            {" "}
+                            <ArrowRight className="inline h-3 w-3" /> {attempt.circuit_state_after}
+                          </>
                         ) : null}
-                        {attempt.circuit_failure_count != null && attempt.circuit_failure_threshold != null
+                        {attempt.circuit_failure_count != null &&
+                        attempt.circuit_failure_threshold != null
                           ? ` (${attempt.circuit_failure_count}/${attempt.circuit_failure_threshold})`
                           : null}
                       </span>
@@ -473,7 +489,9 @@ function DecisionTags({ attempt }: { attempt: ProviderChainAttempt }) {
     tags.push({
       label: "决策",
       value: attempt.decision,
-      tone: DECISION_BADGE_TONES[attempt.decision] ?? "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300",
+      tone:
+        DECISION_BADGE_TONES[attempt.decision] ??
+        "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300",
     });
   }
   if (attempt.error_code) {

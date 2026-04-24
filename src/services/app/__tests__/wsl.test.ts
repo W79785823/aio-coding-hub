@@ -54,7 +54,10 @@ describe("services/app/wsl", () => {
     vi.mocked(commands.wslConfigStatusGet)
       .mockResolvedValueOnce([] as any)
       .mockResolvedValueOnce([] as any);
-    vi.mocked(commands.wslConfigureClients).mockResolvedValueOnce({ status: "ok", data: {} as any });
+    vi.mocked(commands.wslConfigureClients).mockResolvedValueOnce({
+      status: "ok",
+      data: {} as any,
+    });
 
     await wslDetect();
     expect(commands.wslDetect).toHaveBeenCalledWith();

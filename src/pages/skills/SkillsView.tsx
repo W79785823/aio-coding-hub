@@ -579,7 +579,12 @@ export function SkillsView({
                 variant="secondary"
                 aria-label="检查更新"
                 onClick={() => void checkForUpdates()}
-                disabled={loading || deletingInstalled || checkUpdatesMutation.isPending || updatingSkillId !== null}
+                disabled={
+                  loading ||
+                  deletingInstalled ||
+                  checkUpdatesMutation.isPending ||
+                  updatingSkillId !== null
+                }
               >
                 {checkUpdatesMutation.isPending ? "检查中…" : "检查更新"}
               </Button>
@@ -667,7 +672,8 @@ export function SkillsView({
                               }
                               onCheckedChange={(next) => void toggleSkillEnabled(skill, next)}
                             />
-                            {isMarketSkill(skill.source_git_url) && updateInfoMap.get(skill.id)?.has_update ? (
+                            {isMarketSkill(skill.source_git_url) &&
+                            updateInfoMap.get(skill.id)?.has_update ? (
                               <Button
                                 size="sm"
                                 variant="primary"

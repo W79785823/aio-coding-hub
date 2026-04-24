@@ -53,12 +53,14 @@ export type EffectDeps = {
   setCx2ccSourceValue: (v: string) => void;
   setOauthStatus: (v: ProviderOAuthStatusResult | null) => void;
   setOauthLoading: (v: boolean) => void;
-  setCx2ccFallbackModels: (v: {
-    main: string;
-    haiku: string;
-    sonnet: string;
-    opus: string;
-  } | null) => void;
+  setCx2ccFallbackModels: (
+    v: {
+      main: string;
+      haiku: string;
+      sonnet: string;
+      opus: string;
+    } | null
+  ) => void;
   setCodexGatewayBaseOrigin: (v: string | null) => void;
   settingsSnapshot: AppSettings | null;
   gatewayStatusSnapshot: GatewayStatus | null;
@@ -68,15 +70,39 @@ export type EffectDeps = {
 
 export function useProviderEditorEffects(d: EffectDeps) {
   const {
-    open, mode, cliKey, editProvider, editingProviderId, createInitialValues,
-    authMode, costMultiplierValue, isCodexGatewaySource, selectedCx2ccSourceProvider,
-    reset, setValue,
-    editProviderSnapshotRef, baseUrlRowSeqRef, oauthStatusRequestSeqRef,
+    open,
+    mode,
+    cliKey,
+    editProvider,
+    editingProviderId,
+    createInitialValues,
+    authMode,
+    costMultiplierValue,
+    isCodexGatewaySource,
+    selectedCx2ccSourceProvider,
+    reset,
+    setValue,
+    editProviderSnapshotRef,
+    baseUrlRowSeqRef,
+    oauthStatusRequestSeqRef,
     newBaseUrlRow,
-    setBaseUrlMode, setBaseUrlRows, setPingingAll, setClaudeModels, setTags, setTagInput,
-    setStreamIdleTimeoutSeconds, setAuthMode, setCx2ccSourceValue, setOauthStatus,
-    setOauthLoading, setCx2ccFallbackModels, setCodexGatewayBaseOrigin,
-    settingsSnapshot, gatewayStatusSnapshot, oauthStatusSnapshot, oauthStatusError,
+    setBaseUrlMode,
+    setBaseUrlRows,
+    setPingingAll,
+    setClaudeModels,
+    setTags,
+    setTagInput,
+    setStreamIdleTimeoutSeconds,
+    setAuthMode,
+    setCx2ccSourceValue,
+    setOauthStatus,
+    setOauthLoading,
+    setCx2ccFallbackModels,
+    setCodexGatewayBaseOrigin,
+    settingsSnapshot,
+    gatewayStatusSnapshot,
+    oauthStatusSnapshot,
+    oauthStatusError,
   } = d;
   const oauthStatusErrorRef = useRef<string | null>(null);
 
@@ -251,11 +277,5 @@ export function useProviderEditorEffects(d: EffectDeps) {
       error: errorText,
     });
     toast(`加载 OAuth 状态失败：${errorText}`);
-  }, [
-    editProvider?.auth_mode,
-    editProvider?.cli_key,
-    editProvider?.id,
-    oauthStatusError,
-    open,
-  ]);
+  }, [editProvider?.auth_mode, editProvider?.cli_key, editProvider?.id, oauthStatusError, open]);
 }

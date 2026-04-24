@@ -112,19 +112,15 @@ export async function handleOAuthLogin(ctx: OAuthActionContext) {
       }
 
       toast("OAuth 登录成功");
-      logToConsole(
-        "info",
-        `OAuth 登录成功：${ctx.form.getValues().name || "OAuth Provider"}`,
-        {
-          cli_key: ctx.cliKey,
-          provider_id: targetProviderId,
-          provider_type: result.provider_type,
-          email: status?.email,
-          expires_at: result.expires_at,
-          limit_5h: limits?.limit_5h_text,
-          limit_weekly: limits?.limit_weekly_text,
-        }
-      );
+      logToConsole("info", `OAuth 登录成功：${ctx.form.getValues().name || "OAuth Provider"}`, {
+        cli_key: ctx.cliKey,
+        provider_id: targetProviderId,
+        provider_type: result.provider_type,
+        email: status?.email,
+        expires_at: result.expires_at,
+        limit_5h: limits?.limit_5h_text,
+        limit_weekly: limits?.limit_weekly_text,
+      });
       if (!ctx.editingProviderId) {
         ctx.onSaved(ctx.cliKey);
         ctx.onOpenChange(false);
@@ -132,20 +128,18 @@ export async function handleOAuthLogin(ctx: OAuthActionContext) {
     } else {
       await rollbackAutoSavedProvider();
       toast("OAuth 登录失败");
-      logToConsole(
-        "warn",
-        `OAuth 登录失败：${ctx.form.getValues().name || "OAuth Provider"}`,
-        { cli_key: ctx.cliKey, provider_id: targetProviderId }
-      );
+      logToConsole("warn", `OAuth 登录失败：${ctx.form.getValues().name || "OAuth Provider"}`, {
+        cli_key: ctx.cliKey,
+        provider_id: targetProviderId,
+      });
     }
   } catch (err) {
     await rollbackAutoSavedProvider();
     toast(`OAuth 登录失败：${String(err)}`);
-    logToConsole(
-      "error",
-      `OAuth 登录异常：${ctx.form.getValues().name || "OAuth Provider"}`,
-      { cli_key: ctx.cliKey, error: String(err) }
-    );
+    logToConsole("error", `OAuth 登录异常：${ctx.form.getValues().name || "OAuth Provider"}`, {
+      cli_key: ctx.cliKey,
+      error: String(err),
+    });
   } finally {
     ctx.setOauthLoading(false);
   }

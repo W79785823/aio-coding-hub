@@ -470,4 +470,34 @@ describe("home/RequestLogDetailDialog", () => {
     expect(screen.getByText("error_details_json")).toBeInTheDocument();
     expect(screen.getByText(/GW_UPSTREAM_ALL_FAILED/)).toBeInTheDocument();
   });
+
+  it("uses unavailable terminal state as the final provider label", () => {
+    setRequestLogQueryState({
+      selectedLog: createSelectedLog({
+        status: 503,
+        error_code: "GW_ALL_PROVIDERS_UNAVAILABLE",
+        final_provider_id: 0,
+        final_provider_name: "Unknown",
+        attempts_json: JSON.stringify([
+          {
+            provider_id: 48,
+            provider_name: "Burned Provider",
+            outcome: "skipped",
+            status: null,
+            error_code: "GW_PROVIDER_CIRCUIT_OPEN",
+            decision: "skip",
+            reason: "provider skipped by circuit breaker",
+          },
+        ]),
+      }),
+    });
+    setTraceStoreState({ traces: [] });
+
+    render(<RequestLogDetailDialog selectedLogId={1} onSelectLogId={vi.fn()} />);
+
+    expect(screen.getByText("全部不可用")).toBeInTheDocument();
+    switchToTab("决策链");
+    expect(screen.getByText("最终供应商：无可用供应商")).toBeInTheDocument();
+    expect(screen.queryByText("最终供应商：Burned Provider")).not.toBeInTheDocument();
+  });
 });

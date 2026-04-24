@@ -220,9 +220,7 @@ export async function cliManagerGeminiConfigGet() {
     title: "读取 Gemini 配置失败",
     cmd: "cli_manager_gemini_config_get",
     invoke: () =>
-      commands.cliManagerGeminiConfigGet() as Promise<
-        GeneratedCommandResult<GeminiConfigState>
-      >,
+      commands.cliManagerGeminiConfigGet() as Promise<GeneratedCommandResult<GeminiConfigState>>,
   });
 }
 

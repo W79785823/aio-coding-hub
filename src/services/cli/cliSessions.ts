@@ -101,8 +101,9 @@ export async function cliSessionsProjectsList(source: CliSessionsSource, wslDist
       wslDistro: wslDistro ?? null,
     },
     invoke: async () =>
-      mapGeneratedCommandResponse(await commands.cliSessionsProjectsList(source, wslDistro ?? null), (rows) =>
-        rows.map(toCliSessionsProjectSummary)
+      mapGeneratedCommandResponse(
+        await commands.cliSessionsProjectsList(source, wslDistro ?? null),
+        (rows) => rows.map(toCliSessionsProjectSummary)
       ),
   });
 }
@@ -178,8 +179,9 @@ export async function cliSessionsFolderLookupByIds(
       wslDistro: wslDistro ?? null,
     },
     invoke: async () =>
-      mapGeneratedCommandResponse(await commands.cliSessionsFolderLookupByIds(items, wslDistro ?? null), (rows) =>
-        rows.map(toCliSessionsFolderLookupEntry)
+      mapGeneratedCommandResponse(
+        await commands.cliSessionsFolderLookupByIds(items, wslDistro ?? null),
+        (rows) => rows.map(toCliSessionsFolderLookupEntry)
       ),
   });
 }
@@ -218,4 +220,8 @@ export function escapeShellArg(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
-export type { CliSessionsDisplayContentBlock, CliSessionsDisplayMessage, CliSessionsPaginatedMessages };
+export type {
+  CliSessionsDisplayContentBlock,
+  CliSessionsDisplayMessage,
+  CliSessionsPaginatedMessages,
+};

@@ -24,7 +24,9 @@ export async function gatewayStart(preferredPort?: number) {
     cmd: "gateway_start",
     args: { preferredPort: preferredPort ?? null },
     invoke: () =>
-      commands.gatewayStart(preferredPort ?? null) as Promise<GeneratedCommandResult<GatewayStatus>>,
+      commands.gatewayStart(preferredPort ?? null) as Promise<
+        GeneratedCommandResult<GatewayStatus>
+      >,
   });
 }
 
@@ -135,8 +137,7 @@ export async function gatewayUpstreamProxyTest({
     title: "代理连接测试失败",
     cmd: "gateway_upstream_proxy_test",
     args: { input },
-    invoke: () =>
-      commands.gatewayUpstreamProxyTest(input) as Promise<GeneratedCommandResult<null>>,
+    invoke: () => commands.gatewayUpstreamProxyTest(input) as Promise<GeneratedCommandResult<null>>,
     nullResultBehavior: "return_fallback",
     fallback: null,
   });

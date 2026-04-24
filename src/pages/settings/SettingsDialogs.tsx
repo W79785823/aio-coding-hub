@@ -89,7 +89,11 @@ export function SettingsDialogs({
             >
               取消
             </Button>
-            <Button onClick={() => void resetAll.confirm()} variant="danger" disabled={resetAll.pending}>
+            <Button
+              onClick={() => void resetAll.confirm()}
+              variant="danger"
+              disabled={resetAll.pending}
+            >
               {resetAll.pending ? "清理中…" : "确认清理并退出"}
             </Button>
           </div>

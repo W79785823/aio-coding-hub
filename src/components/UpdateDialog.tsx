@@ -1,4 +1,11 @@
-import { MDXEditor, headingsPlugin, linkPlugin, listsPlugin, quotePlugin, thematicBreakPlugin } from "@mdxeditor/editor";
+import {
+  MDXEditor,
+  headingsPlugin,
+  linkPlugin,
+  listsPlugin,
+  quotePlugin,
+  thematicBreakPlugin,
+} from "@mdxeditor/editor";
 import { toast } from "sonner";
 import { AIO_RELEASES_URL } from "../constants/urls";
 import { logToConsole } from "../services/consoleLog";

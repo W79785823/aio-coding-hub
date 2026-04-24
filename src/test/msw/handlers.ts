@@ -396,7 +396,9 @@ export const handlers = [
   ),
   http.post(`${TAURI_ENDPOINT}/desktop_notification_notify`, () => HttpResponse.json(true)),
   http.post(`${TAURI_ENDPOINT}/desktop_updater_check`, () => HttpResponse.json(false)),
-  http.post(`${TAURI_ENDPOINT}/desktop_updater_download_and_install`, () => HttpResponse.json(true)),
+  http.post(`${TAURI_ENDPOINT}/desktop_updater_download_and_install`, () =>
+    HttpResponse.json(true)
+  ),
 
   // ---- Data Management ----
   http.post(`${TAURI_ENDPOINT}/db_disk_usage_get`, () => HttpResponse.json(getDbDiskUsageState())),

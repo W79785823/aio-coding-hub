@@ -76,9 +76,7 @@ type CodexServiceTierResultSetting = {
   effectivePriority?: boolean;
 };
 
-function isCodexServiceTierResultSetting(
-  value: unknown
-): value is CodexServiceTierResultSetting {
+function isCodexServiceTierResultSetting(value: unknown): value is CodexServiceTierResultSetting {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -130,6 +128,7 @@ export function buildRequestLogAuditMeta(log: RequestLogAuditInput): RequestLogA
     !isSuccessful &&
     (!!(log.error_code && CLIENT_ABORT_ERROR_CODES.has(log.error_code)) ||
       settingTypes.has("client_abort"));
+  const isAllProvidersUnavailable = log.error_code === GatewayErrorCodes.ALL_PROVIDERS_UNAVAILABLE;
   const excludedFromStats = !!log.excluded_from_stats;
 
   const tags: RequestLogAuditTag[] = [];
@@ -164,6 +163,16 @@ export function buildRequestLogAuditMeta(log: RequestLogAuditInput): RequestLogA
     );
   }
 
+  if (isAllProvidersUnavailable) {
+    tags.push(
+      auditTag(
+        "全部不可用",
+        "bg-rose-50/80 text-rose-700 ring-1 ring-inset ring-rose-500/10 dark:bg-rose-500/15 dark:text-rose-200 dark:ring-rose-400/20",
+        "当前没有可用 Provider，通常是全部处于熔断、冷却或限流状态"
+      )
+    );
+  }
+
   if (excludedFromStats) {
     tags.push(
       auditTag(
@@ -179,6 +188,8 @@ export function buildRequestLogAuditMeta(log: RequestLogAuditInput): RequestLogA
     summary = "Warmup 命中后由网关直接应答，仅保留审计记录，不进入统计。";
   } else if (isCliProxyGuard) {
     summary = "这次请求由 CLI 代理守卫提前处理，保留为审计行。";
+  } else if (isAllProvidersUnavailable) {
+    summary = "当前没有可用 Provider，网关未继续向已熔断或冷却中的供应商发起上游请求。";
   } else if (isClientAbort) {
     summary = "客户端中途中断了请求，系统保留这条审计记录但不计入统计。";
   } else if (excludedFromStats) {
@@ -189,7 +200,13 @@ export function buildRequestLogAuditMeta(log: RequestLogAuditInput): RequestLogA
     muted: tags.length > 0,
     summary,
     tags,
-    providerFallbackText: isWarmupIntercept ? "Warmup" : isCliProxyGuard ? "CLI 守卫" : null,
+    providerFallbackText: isWarmupIntercept
+      ? "Warmup"
+      : isCliProxyGuard
+        ? "CLI 守卫"
+        : isAllProvidersUnavailable
+          ? "无可用供应商"
+          : null,
   };
 }
 

@@ -13,9 +13,7 @@ import {
   wslKeys,
 } from "./keys";
 
-async function invalidateImportedConfigQueries(
-  queryClient: ReturnType<typeof useQueryClient>
-) {
+async function invalidateImportedConfigQueries(queryClient: ReturnType<typeof useQueryClient>) {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: settingsKeys.all }),
     queryClient.invalidateQueries({ queryKey: gatewayKeys.all }),

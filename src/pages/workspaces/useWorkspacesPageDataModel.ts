@@ -19,7 +19,10 @@ import {
 import { logToConsole } from "../../services/consoleLog";
 import { getOrderedClis, pickDefaultCliByPriority } from "../../services/cli/cliPriorityOrder";
 import type { CliKey } from "../../services/providers/providers";
-import { type WorkspaceApplyReport, type WorkspaceSummary } from "../../services/workspace/workspaces";
+import {
+  type WorkspaceApplyReport,
+  type WorkspaceSummary,
+} from "../../services/workspace/workspaces";
 
 export type WorkspacesRightTab = "overview" | "prompts" | "mcp" | "skills";
 
@@ -109,7 +112,8 @@ export function useWorkspacesPageDataModel() {
     if (!result) return;
 
     setSelectedWorkspaceId((previousId) => {
-      const stillExists = previousId != null && result.items.some((workspace) => workspace.id === previousId);
+      const stillExists =
+        previousId != null && result.items.some((workspace) => workspace.id === previousId);
       if (stillExists) return previousId;
       if (result.active_id != null) return result.active_id;
       return result.items[0]?.id ?? null;
@@ -130,9 +134,11 @@ export function useWorkspacesPageDataModel() {
     [items, selectedWorkspaceId]
   );
 
-  const workspaceById = useMemo(() => new Map(items.map((workspace) => [workspace.id, workspace])), [items]);
-  const switchTarget =
-    switchTargetId != null ? (workspaceById.get(switchTargetId) ?? null) : null;
+  const workspaceById = useMemo(
+    () => new Map(items.map((workspace) => [workspace.id, workspace])),
+    [items]
+  );
+  const switchTarget = switchTargetId != null ? (workspaceById.get(switchTargetId) ?? null) : null;
 
   useEffect(() => {
     if (!filterText.trim()) return;

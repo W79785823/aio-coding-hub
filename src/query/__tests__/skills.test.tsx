@@ -89,9 +89,7 @@ function createInstalledSkillSummary(
   };
 }
 
-function createLocalSkillSummary(
-  overrides: Partial<LocalSkillSummary> = {}
-): LocalSkillSummary {
+function createLocalSkillSummary(overrides: Partial<LocalSkillSummary> = {}): LocalSkillSummary {
   return {
     dir_name: "skill-a",
     path: "/tmp/skill-a",

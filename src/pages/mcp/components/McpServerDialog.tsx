@@ -242,21 +242,16 @@ function parseJsonDraftFallback(jsonText: string): McpDialogDraft {
     envPairs: recordToPairs(readStringMap(spec.env)),
     cwd: readString(spec.cwd).trim(),
     url,
-    headerPairs: recordToPairs(readStringMap(spec.headers ?? spec.http_headers ?? spec.httpHeaders)),
+    headerPairs: recordToPairs(
+      readStringMap(spec.headers ?? spec.http_headers ?? spec.httpHeaders)
+    ),
   };
 }
 
 function fromServerSummary(
   server: Pick<
     McpServerSummary,
-    | "name"
-    | "transport"
-    | "command"
-    | "args"
-    | "env_keys"
-    | "cwd"
-    | "url"
-    | "header_keys"
+    "name" | "transport" | "command" | "args" | "env_keys" | "cwd" | "url" | "header_keys"
   >
 ): McpDialogDraft {
   return {

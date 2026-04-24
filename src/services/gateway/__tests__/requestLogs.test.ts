@@ -74,7 +74,10 @@ describe("services/gateway/requestLogs", () => {
   });
 
   it("treats null invoke result as error with runtime", async () => {
-    vi.mocked(commands.requestLogsList).mockResolvedValueOnce({ status: "ok", data: null as never });
+    vi.mocked(commands.requestLogsList).mockResolvedValueOnce({
+      status: "ok",
+      data: null as never,
+    });
 
     await expect(requestLogsList("claude", 10)).rejects.toThrow(
       "IPC_NULL_RESULT: request_logs_list"

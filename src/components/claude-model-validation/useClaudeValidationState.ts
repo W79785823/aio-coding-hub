@@ -310,16 +310,7 @@ export function useClaudeValidationState(
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      open,
-      baseUrl,
-      model,
-      templates,
-      crossProviderId,
-      allClaudeProviders,
-      suiteRounds,
-      validating,
-    ]
+    [open, baseUrl, model, templates, crossProviderId, allClaudeProviders, suiteRounds, validating]
   );
 
   async function clearProviderHistory() {

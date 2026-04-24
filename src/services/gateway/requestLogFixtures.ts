@@ -35,7 +35,10 @@ export function createRequestLogRouteHop(
 }
 
 export function createRequestLogSummary(
-  overrides: Omit<Partial<RequestLogSummary>, "cli_key" | "route" | "created_at_ms" | "created_at"> & {
+  overrides: Omit<
+    Partial<RequestLogSummary>,
+    "cli_key" | "route" | "created_at_ms" | "created_at"
+  > & {
     cli_key?: string;
     created_at_ms?: number | null;
     created_at?: number | null;

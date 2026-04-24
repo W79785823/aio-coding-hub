@@ -465,6 +465,8 @@ Before implementation:
 - [ ] Defined format at each boundary
 - [ ] Decided where validation happens
 - [ ] Decided whether Specta bindings must be regenerated
+- [ ] For request logs, mapped `gateway event → request_logs row → generated
+      binding → service type → list card → detail dialog`
 
 After implementation:
 - [ ] Tested with edge cases (null, empty, invalid)
@@ -480,6 +482,10 @@ After implementation:
       owning frontend payload type
 - [ ] Confirmed extension matrices (CLI keys, workspace sync scopes, enabled
       flags) are still owned centrally instead of drifting across layers
+- [ ] For request logs, separated real upstream attempts from provider-gate
+      skips in user-facing wording
+- [ ] For request logs, documented unsupported CLI folder lookup instead of
+      treating it as a lookup miss
 - [ ] Classified helper/probe routes as user-visible vs infra-only and verified
       logs, events, stats, and provider-health side effects match that choice
 - [ ] If the change touches gateway/proxy paths, explicitly list all non-passthrough

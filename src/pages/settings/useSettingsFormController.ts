@@ -23,9 +23,7 @@ export function useSettingsFormController() {
   const commitDraft = useCallback(
     (nextOrFactory: PersistedSettings | ((current: PersistedSettings) => PersistedSettings)) => {
       const next =
-        typeof nextOrFactory === "function"
-          ? nextOrFactory(draftRef.current)
-          : nextOrFactory;
+        typeof nextOrFactory === "function" ? nextOrFactory(draftRef.current) : nextOrFactory;
       draftRef.current = next;
       setDraft(next);
       return next;

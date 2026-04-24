@@ -1,7 +1,4 @@
-import {
-  commands,
-  type DesktopNotificationPermissionState,
-} from "../../generated/bindings";
+import { commands, type DesktopNotificationPermissionState } from "../../generated/bindings";
 import { invokeGeneratedIpc, type GeneratedCommandResult } from "../generatedIpc";
 
 export type DesktopNotificationPermission = DesktopNotificationPermissionState;
@@ -11,9 +8,7 @@ export async function desktopNotificationIsPermissionGranted(): Promise<boolean>
     title: "检查系统通知权限失败",
     cmd: "desktop_notification_is_permission_granted",
     invoke: () =>
-      commands.desktopNotificationIsPermissionGranted() as Promise<
-        GeneratedCommandResult<boolean>
-      >,
+      commands.desktopNotificationIsPermissionGranted() as Promise<GeneratedCommandResult<boolean>>,
     nullResultBehavior: "return_fallback",
     fallback: false,
   });

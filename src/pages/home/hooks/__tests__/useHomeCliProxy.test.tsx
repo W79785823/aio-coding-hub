@@ -8,17 +8,16 @@ import { useHomeCliProxy } from "../useHomeCliProxy";
 vi.mock("../../../../services/consoleLog", () => ({ logToConsole: vi.fn() }));
 
 vi.mock("../../../../services/cli/envConflicts", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../../../services/cli/envConflicts")
-  >("../../../../services/cli/envConflicts");
+  const actual = await vi.importActual<typeof import("../../../../services/cli/envConflicts")>(
+    "../../../../services/cli/envConflicts"
+  );
   return { ...actual, envConflictsCheck: vi.fn() };
 });
 
 vi.mock("../../../../hooks/useCliProxy", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../../hooks/useCliProxy")>(
-      "../../../../hooks/useCliProxy"
-    );
+  const actual = await vi.importActual<typeof import("../../../../hooks/useCliProxy")>(
+    "../../../../hooks/useCliProxy"
+  );
   return { ...actual, useCliProxy: vi.fn() };
 });
 
@@ -83,7 +82,9 @@ describe("pages/home/hooks/useHomeCliProxy", () => {
       await Promise.resolve();
     });
 
-    await waitFor(() => expect(cliProxyState.setCliProxyEnabled).toHaveBeenCalledWith("codex", true));
+    await waitFor(() =>
+      expect(cliProxyState.setCliProxyEnabled).toHaveBeenCalledWith("codex", true)
+    );
     expect(result.current.cliProxyToggling.codex).toBe(false);
   });
 
@@ -98,7 +99,9 @@ describe("pages/home/hooks/useHomeCliProxy", () => {
       result.current.requestCliProxyEnabledSwitch("codex", true);
     });
 
-    await waitFor(() => expect(cliProxyState.setCliProxyEnabled).toHaveBeenCalledWith("codex", true));
+    await waitFor(() =>
+      expect(cliProxyState.setCliProxyEnabled).toHaveBeenCalledWith("codex", true)
+    );
     expect(logToConsole).toHaveBeenCalledWith(
       "error",
       "检查环境变量冲突失败，仍尝试开启 CLI 代理",

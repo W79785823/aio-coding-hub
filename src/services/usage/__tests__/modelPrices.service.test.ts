@@ -39,9 +39,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-function makeModelPriceSummary(
-  overrides: Partial<ModelPriceSummary> = {}
-): ModelPriceSummary {
+function makeModelPriceSummary(overrides: Partial<ModelPriceSummary> = {}): ModelPriceSummary {
   return {
     id: 1,
     cli_key: "claude",
@@ -53,9 +51,7 @@ function makeModelPriceSummary(
   };
 }
 
-function makeModelPriceAliases(
-  overrides: Partial<ModelPriceAliases> = {}
-): ModelPriceAliases {
+function makeModelPriceAliases(overrides: Partial<ModelPriceAliases> = {}): ModelPriceAliases {
   return {
     version: 1,
     rules: [
@@ -125,9 +121,7 @@ describe("services/usage/modelPrices", () => {
     expect(rows?.[0]?.cli_key).toBe("claude");
     expect(aliases?.rules[0]?.cli_key).toBe("codex");
     expect(updated?.version).toBe(2);
-    expect(report).toEqual(
-      expect.objectContaining({ status: "updated", inserted: 1, total: 1 })
-    );
+    expect(report).toEqual(expect.objectContaining({ status: "updated", inserted: 1, total: 1 }));
     expect(commands.modelPricesList).toHaveBeenCalledWith("claude");
     expect(commands.modelPriceAliasesSet).toHaveBeenCalledWith(aliases);
     expect(commands.modelPricesSyncBasellm).toHaveBeenCalledWith(true);

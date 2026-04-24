@@ -97,8 +97,7 @@ function appendDefaultBundlesArg(tauriArgs, userArgs) {
     return;
   }
 
-  const resolvedTarget =
-    resolveCliOptionValue(userArgs, ["--target", "-t"]) ?? resolveHostTarget();
+  const resolvedTarget = resolveCliOptionValue(userArgs, ["--target", "-t"]) ?? resolveHostTarget();
   const defaultBundles = resolvedTarget ? DEFAULT_BUNDLES_BY_TARGET[resolvedTarget] : null;
   if (!defaultBundles) {
     return;
