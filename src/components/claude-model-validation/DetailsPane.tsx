@@ -335,7 +335,7 @@ export function DetailsPane(props: DetailsPaneProps) {
   };
 
   return (
-    <div className="flex flex-col gap-4 h-full min-h-0 min-w-0 flex-1 overflow-y-auto custom-scrollbar pr-1">
+    <div className="flex flex-col gap-4 h-full min-h-0 min-w-0 flex-1 overflow-y-auto scrollbar-overlay pr-1">
       <div className="sticky top-0 z-20 bg-white/90 dark:bg-slate-900/80 backdrop-blur border-b border-slate-100 dark:border-slate-700 pb-3 pt-2">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
@@ -577,7 +577,7 @@ function StepDetailPanel({
             <div className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
               SSE \u539f\u6587
             </div>
-            <pre className="custom-scrollbar max-h-60 overflow-auto rounded-lg bg-slate-950 p-4 font-mono text-[10px] leading-relaxed text-slate-300">
+            <pre className="scrollbar-overlay max-h-60 overflow-auto rounded-lg bg-slate-950 p-4 font-mono text-[10px] leading-relaxed text-slate-300">
               {sseText ? (
                 sseText
               ) : (

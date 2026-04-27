@@ -82,7 +82,7 @@ export function HistoryListPanel({
               <span className="text-xs">No History</span>
             </div>
           ) : (
-            <div className="custom-scrollbar h-full overflow-y-auto p-3 space-y-2">
+            <div className="scrollbar-overlay h-full overflow-y-auto p-3 space-y-2">
               {historyGroups.map((group) => (
                 <HistoryGroupButton
                   key={group.key}

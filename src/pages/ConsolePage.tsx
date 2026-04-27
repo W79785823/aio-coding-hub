@@ -228,14 +228,14 @@ const ConsoleLogRow = memo(function ConsoleLogRow({
       {isOpen ? (
         <div className={cn(ROW_GRID_CLASS, "px-4 pb-4 pt-0")}>
           <div className="col-start-3 col-span-2 space-y-2">
-            <pre className="custom-scrollbar max-h-60 overflow-auto rounded-md bg-slate-100 dark:bg-slate-950 p-3 text-[11px] leading-relaxed text-slate-700 dark:text-slate-400 font-mono border border-slate-200 dark:border-white/5 mx-1 whitespace-pre-wrap">
+            <pre className="scrollbar-overlay max-h-60 overflow-auto rounded-md bg-slate-100 dark:bg-slate-950 p-3 text-[11px] leading-relaxed text-slate-700 dark:text-slate-400 font-mono border border-slate-200 dark:border-white/5 mx-1 whitespace-pre-wrap">
               {smartText == null ? "加载中…" : smartText ? smartText : "// 无可显示的详情"}
             </pre>
             <details className="group/raw">
               <summary className="text-[10px] text-slate-500 cursor-pointer hover:text-slate-700 dark:hover:text-slate-400 select-none mx-1">
                 原始数据
               </summary>
-              <pre className="custom-scrollbar max-h-40 overflow-auto rounded-md bg-slate-100 dark:bg-slate-950 p-3 text-[11px] leading-relaxed text-slate-600 dark:text-slate-500 font-mono border border-slate-200 dark:border-white/5 mx-1 mt-1">
+              <pre className="scrollbar-overlay max-h-40 overflow-auto rounded-md bg-slate-100 dark:bg-slate-950 p-3 text-[11px] leading-relaxed text-slate-600 dark:text-slate-500 font-mono border border-slate-200 dark:border-white/5 mx-1 mt-1">
                 {rawText == null ? "加载中…" : rawText ? rawText : "// 无原始数据"}
               </pre>
             </details>
@@ -436,7 +436,7 @@ export function ConsolePage() {
           ref={logsContainerRef}
           onScroll={handleScroll}
           className={cn(
-            "custom-scrollbar min-h-0 flex-1 overflow-auto",
+            "scrollbar-overlay min-h-0 flex-1 overflow-auto",
             "bg-gradient-to-b from-slate-50 to-white dark:from-slate-950 dark:to-slate-900 font-mono text-[12px] leading-relaxed text-slate-700 dark:text-slate-200",
             "shadow-inner"
           )}

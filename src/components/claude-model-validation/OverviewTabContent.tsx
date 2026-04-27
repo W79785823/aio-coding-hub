@@ -234,7 +234,7 @@ function SingleHistoryOverview({
             <div className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
               SSE \u539f\u6587
             </div>
-            <pre className="custom-scrollbar max-h-60 overflow-auto rounded-lg bg-slate-950 p-4 font-mono text-[10px] leading-relaxed text-slate-300">
+            <pre className="scrollbar-overlay max-h-60 overflow-auto rounded-lg bg-slate-950 p-4 font-mono text-[10px] leading-relaxed text-slate-300">
               {sseText ? (
                 sseText
               ) : (

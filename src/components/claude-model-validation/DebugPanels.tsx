@@ -247,7 +247,7 @@ export function NonSuiteDebugPanel({
           </div>
         </summary>
         <div className="border-t border-slate-100 dark:border-slate-700 p-0">
-          <pre className="custom-scrollbar max-h-60 overflow-auto bg-slate-950 p-4 font-mono text-[10px] leading-relaxed text-slate-300">
+          <pre className="scrollbar-overlay max-h-60 overflow-auto bg-slate-950 p-4 font-mono text-[10px] leading-relaxed text-slate-300">
             <span className="text-slate-500 dark:text-slate-400">
               {(() => {
                 const t = getClaudeValidationTemplate(activeResultTemplateKey);

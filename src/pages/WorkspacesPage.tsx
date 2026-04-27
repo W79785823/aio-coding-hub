@@ -288,7 +288,7 @@ export function WorkspacesPage() {
                   "mt-4 min-h-0 flex-1",
                   rightTab === "skills"
                     ? "lg:overflow-hidden"
-                    : "lg:overflow-y-auto custom-scrollbar lg:pr-1"
+                    : "lg:overflow-y-auto scrollbar-overlay lg:pr-1"
                 )}
               >
                 {rightTab === "overview" ? (
