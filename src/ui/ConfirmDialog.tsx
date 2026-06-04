@@ -36,6 +36,7 @@ export function ConfirmDialog({
       open={open}
       title={title}
       description={description}
+      className="max-w-lg"
       onOpenChange={(o) => {
         if (!o) onClose();
       }}

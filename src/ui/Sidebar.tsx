@@ -426,6 +426,7 @@ export function Sidebar({ className }: SidebarProps) {
             : "检测到环境变量冲突"
         }
         description="继续启用可能会被这些环境变量覆盖（不会显示变量值）。是否继续？"
+        className="max-w-lg"
       >
         {pendingCliProxyEnablePrompt ? (
           <div className="space-y-4">

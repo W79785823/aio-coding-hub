@@ -28,15 +28,15 @@ export const DialogContent = forwardRef<
       <DialogClose asChild>
         <DialogOverlay />
       </DialogClose>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-4">
         <DialogPrimitive.Content
           ref={ref}
           className={cn(
             [
-              "w-full overflow-hidden border border-line bg-surface-panel shadow-dialog",
+              "pointer-events-auto w-full overflow-hidden border border-line bg-surface-panel shadow-dialog",
               "flex max-h-[calc(100vh-2rem)] flex-col outline-none",
               "rounded-2xl",
-              "max-w-[calc(100vw-2rem)]",
+              "max-w-lg",
             ].join(" "),
             className
           )}

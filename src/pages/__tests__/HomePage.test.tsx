@@ -478,7 +478,9 @@ describe("pages/HomePage", () => {
 
       // switch claude with active sessions -> confirmation dialog
       fireEvent.click(screen.getByRole("button", { name: "request-switch-claude-2" }));
-      const dialog = within(screen.getByRole("dialog"));
+      const dialogEl = screen.getByRole("dialog");
+      expect(dialogEl).toHaveClass("max-w-lg");
+      const dialog = within(dialogEl);
       fireEvent.click(dialog.getByRole("button", { name: "确认切换" }));
       await Promise.resolve();
       expect(activeSetMutation.mutateAsync).toHaveBeenCalledWith({ cliKey: "claude", modeId: 2 });

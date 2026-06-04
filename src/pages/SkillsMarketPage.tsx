@@ -385,6 +385,7 @@ export function SkillsMarketPage() {
         title="Skill 仓库"
         description="启用后的仓库会参与发现。刷新发现只会更新 ~/.aio-coding-hub/skill-repos 下的缓存副本，不会动你的原始仓库。"
         onOpenChange={setRepoDialogOpen}
+        className="max-w-3xl"
       >
         <div className="space-y-4">
           <div className="rounded-lg border border-line-subtle bg-secondary p-3">
@@ -489,6 +490,7 @@ export function SkillsMarketPage() {
         onOpenChange={(open) => {
           if (!open) setRepoDeleteTarget(null);
         }}
+        className="max-w-lg"
       >
         <div className="space-y-3">
           <div className="text-sm text-secondary-foreground">确认删除以下仓库？</div>

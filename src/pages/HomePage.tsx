@@ -275,6 +275,7 @@ export function HomePage() {
             ? `目前还有 ${pendingSortModeSwitch.activeSessionCount} 个活跃 Session，切换模板可能导致会话中断，是否确认？`
             : undefined
         }
+        className="max-w-lg"
       >
         <div className="flex items-center justify-end gap-2">
           <Button
