@@ -53,10 +53,14 @@ fn is_missing_plugin_table_error(err: &AppError) -> bool {
 pub(crate) fn install_official_plugin(
     db: &crate::db::Db,
     plugin_id: &str,
+    official_resource_root: &Path,
     host_version: &str,
     installed_root: &Path,
 ) -> AppResult<PluginDetail> {
-    let fixture = crate::app::plugins::official::official_plugin(plugin_id)?;
+    let fixture = crate::app::plugins::official::official_plugin_from_root(
+        plugin_id,
+        official_resource_root,
+    )?;
     let installed_dir = crate::app::plugins::official_assets::materialize_official_plugin(
         plugin_id,
         &fixture.root_dir,
@@ -1447,10 +1451,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("official-plugins.db")).unwrap();
         let installed_root = dir.path().join("installed");
+        let official_root = crate::app::plugins::official::official_resource_root_for_tests();
 
         let installed = install_official_plugin(
             &db,
             "official.privacy-filter",
+            &official_root,
             env!("CARGO_PKG_VERSION"),
             &installed_root,
         )
@@ -1524,10 +1530,12 @@ DROP TABLE plugins;
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("official-privacy-filter.db")).unwrap();
         let installed_root = dir.path().join("installed");
+        let official_root = crate::app::plugins::official::official_resource_root_for_tests();
 
         let installed = install_official_plugin(
             &db,
             "official.privacy-filter",
+            &official_root,
             env!("CARGO_PKG_VERSION"),
             &installed_root,
         )
@@ -1566,10 +1574,12 @@ DROP TABLE plugins;
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("official-privacy-filter.db")).unwrap();
         let installed_root = dir.path().join("installed");
+        let official_root = crate::app::plugins::official::official_resource_root_for_tests();
 
         install_official_plugin(
             &db,
             "official.privacy-filter",
+            &official_root,
             env!("CARGO_PKG_VERSION"),
             &installed_root,
         )
@@ -1655,10 +1665,12 @@ DROP TABLE plugins;
             crate::db::init_for_tests(&dir.path().join("official-privacy-filter-legacy-config.db"))
                 .unwrap();
         let installed_root = dir.path().join("installed");
+        let official_root = crate::app::plugins::official::official_resource_root_for_tests();
 
         install_official_plugin(
             &db,
             "official.privacy-filter",
+            &official_root,
             env!("CARGO_PKG_VERSION"),
             &installed_root,
         )
@@ -1747,10 +1759,12 @@ DROP TABLE plugins;
         )
         .unwrap();
         let installed_root = dir.path().join("installed");
+        let official_root = crate::app::plugins::official::official_resource_root_for_tests();
 
         install_official_plugin(
             &db,
             "official.privacy-filter",
+            &official_root,
             env!("CARGO_PKG_VERSION"),
             &installed_root,
         )
@@ -1794,10 +1808,12 @@ DROP TABLE plugins;
         )
         .unwrap();
         let installed_root = dir.path().join("installed");
+        let official_root = crate::app::plugins::official::official_resource_root_for_tests();
 
         install_official_plugin(
             &db,
             "official.privacy-filter",
+            &official_root,
             env!("CARGO_PKG_VERSION"),
             &installed_root,
         )
@@ -1833,10 +1849,12 @@ DROP TABLE plugins;
         let db = crate::db::init_for_tests(&dir.path().join("official-privacy-filter-hooks.db"))
             .unwrap();
         let installed_root = dir.path().join("installed");
+        let official_root = crate::app::plugins::official::official_resource_root_for_tests();
 
         install_official_plugin(
             &db,
             "official.privacy-filter",
+            &official_root,
             env!("CARGO_PKG_VERSION"),
             &installed_root,
         )
@@ -1871,10 +1889,12 @@ DROP TABLE plugins;
         let db = crate::db::init_for_tests(&dir.path().join("official-privacy-filter-detail.db"))
             .unwrap();
         let installed_root = dir.path().join("installed");
+        let official_root = crate::app::plugins::official::official_resource_root_for_tests();
 
         install_official_plugin(
             &db,
             "official.privacy-filter",
+            &official_root,
             env!("CARGO_PKG_VERSION"),
             &installed_root,
         )

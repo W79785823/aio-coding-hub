@@ -7,6 +7,7 @@ use crate::infra::plugins::market::PluginMarketListing;
 use crate::{blocking, plugins};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tauri::Manager;
 
 #[derive(Debug, Clone, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +73,29 @@ pub(crate) struct PluginInstallRemoteInput {
     pub signature: Option<String>,
     pub public_key: Option<String>,
     pub source: Option<String>,
+}
+
+fn official_resource_root<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("failed to resolve official plugin resources: {error}"))?;
+    let bundled_root =
+        resource_dir.join(crate::app::plugins::official::OFFICIAL_RESOURCE_RELATIVE_ROOT);
+    if official_resource_root_exists(&bundled_root) {
+        return Ok(bundled_root);
+    }
+
+    let dev_root = resource_dir.join("plugins/official");
+    if official_resource_root_exists(&dev_root) {
+        return Ok(dev_root);
+    }
+
+    Ok(bundled_root)
+}
+
+fn official_resource_root_exists(root: &std::path::Path) -> bool {
+    root.join("privacy-filter").join("plugin.json").exists()
 }
 
 #[tauri::command]
@@ -281,11 +305,13 @@ pub(crate) async fn plugin_install_official(
     input: PluginGetInput,
 ) -> Result<PluginDetail, String> {
     let db = ensure_db_ready(app.clone(), db_state.inner()).await?;
+    let official_resource_root = official_resource_root(&app)?;
     blocking::run("plugin_install_official", move || {
         let installed_dir = crate::app_paths::plugins_installed_dir(&app)?;
         plugin_service::install_official_plugin(
             &db,
             &input.plugin_id,
+            &official_resource_root,
             env!("CARGO_PKG_VERSION"),
             &installed_dir,
         )
@@ -569,6 +595,20 @@ fn validate_remote_plugin_download_url(download_url: &str) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn official_resource_root_resolves_packaged_plugin_manifest() {
+        let app = tauri::test::mock_app();
+
+        let root = official_resource_root(app.handle()).expect("official resource root");
+
+        let manifest = root.join("privacy-filter").join("plugin.json");
+        assert!(
+            manifest.exists(),
+            "official plugin manifest should exist at {}",
+            manifest.display()
+        );
+    }
 
     #[test]
     fn market_index_signature_uses_trusted_source_public_key() {

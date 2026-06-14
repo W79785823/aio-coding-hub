@@ -5,8 +5,9 @@ use crate::shared::error::{AppError, AppResult};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-const OFFICIAL_RESOURCE_ROOT: &str =
+const OFFICIAL_SOURCE_RESOURCE_ROOT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/resources/plugins/official");
+pub(crate) const OFFICIAL_RESOURCE_RELATIVE_ROOT: &str = "resources/plugins/official";
 
 pub(crate) struct OfficialPluginFixture {
     pub(crate) manifest: PluginManifest,
@@ -15,7 +16,14 @@ pub(crate) struct OfficialPluginFixture {
 }
 
 pub(crate) fn official_plugin(plugin_id: &str) -> AppResult<OfficialPluginFixture> {
-    let root_dir = official_plugin_root(plugin_id)?;
+    official_plugin_from_root(plugin_id, &official_source_resource_root())
+}
+
+pub(crate) fn official_plugin_from_root(
+    plugin_id: &str,
+    official_resource_root: &Path,
+) -> AppResult<OfficialPluginFixture> {
+    let root_dir = official_plugin_root(plugin_id, official_resource_root)?;
     let manifest_path = root_dir.join("plugin.json");
     let bytes = crate::shared::fs::read_file_with_max_len(&manifest_path, 256 * 1024)?;
     let manifest: PluginManifest = serde_json::from_slice(&bytes).map_err(|err| {
@@ -47,7 +55,16 @@ pub(crate) fn official_plugin_ids() -> &'static [&'static str] {
     &["official.privacy-filter"]
 }
 
-fn official_plugin_root(plugin_id: &str) -> AppResult<PathBuf> {
+pub(crate) fn official_source_resource_root() -> PathBuf {
+    PathBuf::from(OFFICIAL_SOURCE_RESOURCE_ROOT)
+}
+
+#[cfg(test)]
+pub(crate) fn official_resource_root_for_tests() -> PathBuf {
+    official_source_resource_root()
+}
+
+fn official_plugin_root(plugin_id: &str, official_resource_root: &Path) -> AppResult<PathBuf> {
     let name = match plugin_id {
         "official.privacy-filter" => "privacy-filter",
         _ => {
@@ -58,7 +75,7 @@ fn official_plugin_root(plugin_id: &str) -> AppResult<PathBuf> {
             ));
         }
     };
-    Ok(Path::new(OFFICIAL_RESOURCE_ROOT).join(name))
+    Ok(official_resource_root.join(name))
 }
 
 fn official_default_config(plugin_id: &str) -> Value {
