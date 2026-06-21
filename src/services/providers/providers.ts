@@ -11,6 +11,7 @@ import {
   type ProviderOAuthDisconnectResult,
   type ProviderOAuthLimitsResult,
   type ProviderOAuthRefreshResult,
+  type ProviderOAuthResetCodexQuotaResult,
   type ProviderOAuthStartFlowResult,
   type ProviderOAuthStatusResult,
   type ProviderSummary as GeneratedProviderSummary,
@@ -37,6 +38,7 @@ export type {
   ProviderOAuthDisconnectResult,
   ProviderOAuthLimitsResult,
   ProviderOAuthRefreshResult,
+  ProviderOAuthResetCodexQuotaResult,
   ProviderOAuthStartFlowResult,
   ProviderOAuthStatusResult,
 };
@@ -509,6 +511,26 @@ export async function providerOAuthFetchLimits(
     invoke: () =>
       commands.providerOauthFetchLimits(normalizedProviderId) as Promise<
         GeneratedCommandResult<OAuthLimitsResult>
+      >,
+  });
+}
+
+export async function providerOAuthResetCodexQuota(
+  providerId: number
+): Promise<ProviderOAuthResetCodexQuotaResult> {
+  const normalizedProviderId = validateProviderId(providerId);
+  const confirm = createRiskyIpcConfirm(
+    "provider_oauth_reset_codex_quota",
+    `provider:${normalizedProviderId}:codex_reset_credit`
+  );
+
+  return invokeGeneratedIpc<ProviderOAuthResetCodexQuotaResult>({
+    title: "重置 Codex OAuth 额度失败",
+    cmd: "provider_oauth_reset_codex_quota",
+    args: { providerId: normalizedProviderId, confirm },
+    invoke: () =>
+      commands.providerOauthResetCodexQuota(normalizedProviderId, confirm) as Promise<
+        GeneratedCommandResult<ProviderOAuthResetCodexQuotaResult>
       >,
   });
 }

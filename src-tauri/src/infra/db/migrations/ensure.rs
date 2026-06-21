@@ -560,6 +560,7 @@ CREATE TABLE IF NOT EXISTS provider_oauth_limit_snapshots (
   limit_weekly_text TEXT,
   limit_5h_reset_at INTEGER,
   limit_weekly_reset_at INTEGER,
+  reset_credit_available_count INTEGER,
   checked_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE
@@ -568,7 +569,20 @@ CREATE INDEX IF NOT EXISTS idx_provider_oauth_limit_snapshots_checked_at
   ON provider_oauth_limit_snapshots(checked_at);
 "#,
     )
-    .map_err(|e| format!("failed to ensure provider OAuth limit snapshots table: {e}").into())
+    .map_err(|e| format!("failed to ensure provider OAuth limit snapshots table: {e}"))?;
+
+    if !column_exists(
+        conn,
+        "provider_oauth_limit_snapshots",
+        "reset_credit_available_count",
+    )? {
+        conn.execute_batch(
+            "ALTER TABLE provider_oauth_limit_snapshots ADD COLUMN reset_credit_available_count INTEGER;",
+        )
+        .map_err(|e| format!("failed to add provider OAuth reset credit count column: {e}"))?;
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

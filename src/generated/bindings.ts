@@ -814,6 +814,20 @@ export const commands = {
       else return { status: "error", error: e as any };
     }
   },
+  async providerOauthResetCodexQuota(
+    providerId: number,
+    confirm: RiskyIpcConfirm | null
+  ): Promise<Result<ProviderOAuthResetCodexQuotaResult, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("provider_oauth_reset_codex_quota", { providerId, confirm }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
   async claudeProviderValidateModel(
     providerId: number,
     baseUrl: string,
@@ -2832,8 +2846,16 @@ export type ProviderOAuthLimitsResult = {
   limit_weekly_text: string | null;
   limit_5h_reset_at: number | null;
   limit_weekly_reset_at: number | null;
+  reset_credit_available_count: number | null;
 };
 export type ProviderOAuthRefreshResult = { success: boolean; expires_at: number | null };
+export type ProviderOAuthResetCodexQuotaResult = {
+  success: boolean;
+  code: string | null;
+  windows_reset: number | null;
+  refreshed_limits: ProviderOAuthLimitsResult | null;
+  refresh_error: string | null;
+};
 export type ProviderOAuthStartFlowResult = {
   success: boolean;
   provider_id: number;

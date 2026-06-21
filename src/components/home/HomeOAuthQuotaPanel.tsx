@@ -1,7 +1,10 @@
+import { useMemo, useState } from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { cliBadgeTone, cliShortLabel } from "../../constants/clis";
 import { useNowUnix } from "../../hooks/useNowUnix";
+import { OAuthQuotaUsageInline } from "../providers/OAuthQuotaUsageInline";
 import { Card } from "../../ui/Card";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
 import { Spinner } from "../../ui/Spinner";
 import { cn } from "../../utils/cn";
@@ -18,68 +21,39 @@ export type HomeOAuthQuotaPanelContentProps = {
   refreshing: boolean;
   onRefresh?: () => void;
   onRefreshRow?: (providerId: number) => void;
+  onResetRow?: (providerId: number) => void | Promise<void>;
 };
 
 type HomeOAuthQuotaPanelProps = HomeOAuthQuotaPanelContentProps & {
   onRefresh: () => void;
 };
 
-function formatCompactResetText(resetAt: number | null, nowUnix: number): string | null {
-  if (resetAt == null) return null;
-  const remaining = resetAt - nowUnix;
-  if (remaining <= 0) return "已重置";
-  const totalMinutes = Math.floor(remaining / 60);
-  if (totalMinutes < 1) return "<1m";
-
-  const days = Math.floor(totalMinutes / 1440);
-  const hours = Math.floor((totalMinutes % 1440) / 60);
-  const minutes = totalMinutes % 60;
-
-  if (days > 0) {
-    const dayPart = `${days}d`;
-    const hourPart = hours > 0 ? `${hours}h` : "";
-    const minutePart = minutes > 0 ? `${minutes}m` : "";
-    return `${dayPart}${hourPart}${minutePart}`;
-  }
-
-  if (hours > 0) {
-    return minutes > 0 ? `${hours}h${minutes}m` : `${hours}h`;
-  }
-
-  return `${minutes}m`;
-}
-
-function buildQuotaSegment(
-  label: string,
-  quotaText: string | null,
-  resetText: string | null
-): string | null {
-  if (!quotaText) return null;
-  return resetText ? `${label}: ${quotaText}·${resetText}` : `${label}: ${quotaText}`;
-}
-
 function OAuthQuotaProviderCard({
   row,
   onRefreshRow,
+  onRequestReset,
 }: {
   row: HomeOAuthQuotaRow;
   onRefreshRow?: (providerId: number) => void;
+  onRequestReset?: (row: HomeOAuthQuotaRow) => void;
 }) {
   const shouldTrackNowUnix =
-    row.state === "success" &&
+    row.limits != null &&
     (row.limits?.limit_5h_reset_at != null || row.limits?.limit_weekly_reset_at != null);
   const nowUnix = useNowUnix(shouldTrackNowUnix);
-  const shortLabel = row.limits?.limit_short_label || "短窗";
-  const reset5h = formatCompactResetText(row.limits?.limit_5h_reset_at ?? null, nowUnix);
-  const resetWeekly = formatCompactResetText(row.limits?.limit_weekly_reset_at ?? null, nowUnix);
-  const quotaSummary = [
-    buildQuotaSegment(shortLabel, row.limits?.limit_5h_text ?? null, reset5h),
-    buildQuotaSegment("7d", row.limits?.limit_weekly_text ?? null, resetWeekly),
-  ]
-    .filter((segment): segment is string => Boolean(segment))
-    .join(" / ");
   const showInsufficientQuota =
     row.state === "success" && hasInsufficientHomeOAuthQuota(row.limits);
+  const resetCreditCount =
+    row.cliKey === "codex" ? (row.limits?.reset_credit_available_count ?? null) : null;
+  const showResetCredit = resetCreditCount != null;
+  const canResetCredit = Boolean(
+    showResetCredit && resetCreditCount > 0 && row.state !== "loading" && !row.resetting
+  );
+  const hasQuotaDisplay = hasHomeOAuthQuotaText(row.limits) || showResetCredit;
+  const requestReset = () => {
+    if (!canResetCredit || !onRequestReset) return;
+    onRequestReset(row);
+  };
 
   return (
     <div className="rounded-lg border border-border bg-white px-3 py-2.5 shadow-sm dark:border-border dark:bg-secondary">
@@ -131,19 +105,37 @@ function OAuthQuotaProviderCard({
             刷新中...
           </div>
         ) : row.state === "error" ? (
-          <div className="flex items-start gap-2 text-xs text-rose-600 dark:text-rose-400">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>刷新失败，请重试</span>
-          </div>
+          <>
+            <div className="flex items-start gap-2 text-xs text-rose-600 dark:text-rose-400">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>刷新失败，请重试</span>
+            </div>
+            {hasQuotaDisplay ? (
+              <OAuthQuotaUsageInline
+                cliKey={row.cliKey}
+                limits={row.limits}
+                nowUnix={nowUnix}
+                className="text-xs"
+                resetCreditDisabled={!canResetCredit || !onRequestReset}
+                resetCreditLoading={row.resetting}
+                onResetCreditClick={showResetCredit && onRequestReset ? requestReset : undefined}
+              />
+            ) : null}
+          </>
         ) : row.state === "idle" ? (
           <div className="text-xs text-muted-foreground">点击右上角刷新获取 OAuth 配额</div>
-        ) : !hasHomeOAuthQuotaText(row.limits) ? (
+        ) : !hasQuotaDisplay ? (
           <div className="text-xs text-muted-foreground">暂无 OAuth 配额信息</div>
         ) : (
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-            <span className="min-w-0 truncate font-mono" title={quotaSummary}>
-              {quotaSummary}
-            </span>
+            <OAuthQuotaUsageInline
+              cliKey={row.cliKey}
+              limits={row.limits}
+              nowUnix={nowUnix}
+              resetCreditDisabled={!canResetCredit || !onRequestReset}
+              resetCreditLoading={row.resetting}
+              onResetCreditClick={showResetCredit && onRequestReset ? requestReset : undefined}
+            />
             {showInsufficientQuota ? (
               <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
                 配额不足
@@ -151,6 +143,12 @@ function OAuthQuotaProviderCard({
             ) : null}
           </div>
         )}
+        {row.resetError ? (
+          <div className="flex items-start gap-2 text-xs text-rose-600 dark:text-rose-400">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>{row.resetError}</span>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -163,7 +161,14 @@ export function HomeOAuthQuotaPanelContent({
   refreshing,
   onRefresh,
   onRefreshRow,
+  onResetRow,
 }: HomeOAuthQuotaPanelContentProps) {
+  const [resetTargetId, setResetTargetId] = useState<number | null>(null);
+  const [confirmingResetId, setConfirmingResetId] = useState<number | null>(null);
+  const resetTarget = useMemo(
+    () => rows.find((row) => row.providerId === resetTargetId) ?? null,
+    [resetTargetId, rows]
+  );
   const showNoQuotaNotice =
     hasRefreshed &&
     rows.length > 0 &&
@@ -204,10 +209,35 @@ export function HomeOAuthQuotaPanelContent({
               key={`${row.cliKey}:${row.providerId}`}
               row={row}
               onRefreshRow={onRefreshRow}
+              onRequestReset={
+                onResetRow ? (target) => setResetTargetId(target.providerId) : undefined
+              }
             />
           ))}
         </div>
       </>
+      <ConfirmDialog
+        open={resetTarget != null}
+        title="确认重置 Codex 额度"
+        description="使用 1 次 Codex 重置次数刷新该账号额度？"
+        onClose={() => {
+          if (confirmingResetId != null) return;
+          setResetTargetId(null);
+        }}
+        onConfirm={() => {
+          if (!resetTarget || !onResetRow) return;
+          setConfirmingResetId(resetTarget.providerId);
+          void Promise.resolve(onResetRow(resetTarget.providerId)).finally(() => {
+            setConfirmingResetId(null);
+            setResetTargetId(null);
+          });
+        }}
+        confirmLabel="确认重置"
+        confirmingLabel="重置中…"
+        confirming={confirmingResetId != null}
+        disabled={!resetTarget || resetTarget.resetting}
+        confirmVariant="danger"
+      />
     </div>
   );
 }
@@ -219,6 +249,7 @@ export function HomeOAuthQuotaPanel({
   refreshing,
   onRefresh,
   onRefreshRow,
+  onResetRow,
 }: HomeOAuthQuotaPanelProps) {
   return (
     <Card padding="sm" className="flex h-full flex-col">
@@ -230,6 +261,7 @@ export function HomeOAuthQuotaPanel({
         refreshing={refreshing}
         onRefresh={onRefresh}
         onRefreshRow={onRefreshRow}
+        onResetRow={onResetRow}
       />
     </Card>
   );

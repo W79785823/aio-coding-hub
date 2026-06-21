@@ -1057,6 +1057,7 @@ describe("pages/providers/ProviderEditorDialog", () => {
       limit_weekly_text: "1000 req",
       limit_5h_reset_at: null,
       limit_weekly_reset_at: null,
+      reset_credit_available_count: null,
     });
 
     const onSaved = vi.fn();
@@ -1135,6 +1136,7 @@ describe("pages/providers/ProviderEditorDialog", () => {
       limit_weekly_text: "1000 req",
       limit_5h_reset_at: null,
       limit_weekly_reset_at: null,
+      reset_credit_available_count: null,
     });
 
     const onSaved = vi.fn();
@@ -1296,6 +1298,7 @@ describe("pages/providers/ProviderEditorDialog", () => {
       limit_weekly_text: "1000 req",
       limit_5h_reset_at: null,
       limit_weekly_reset_at: null,
+      reset_credit_available_count: null,
     });
 
     const onSaved = vi.fn();
@@ -1576,6 +1579,7 @@ describe("pages/providers/ProviderEditorDialog", () => {
       limit_weekly_text: "300",
       limit_5h_reset_at: null,
       limit_weekly_reset_at: null,
+      reset_credit_available_count: null,
     });
 
     const onSaved = vi.fn();
