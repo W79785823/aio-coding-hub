@@ -99,3 +99,5 @@ Bundled official plugin：
 ## 0.62 Platform Kernel Decision
 
 0.62 保持 Plugin API v1 externally compatible，重点是收紧内部平台边界而不是扩张公开 API。Contract metadata 成为 drift checks 的来源；hook 行为通过 internal descriptors 路由；runtime dispatch 从 gateway pipeline orchestration 中拆出；provider-specific behavior 开始迁移到 provider adapter facades 后面。
+
+0.62 does not add public provider plugin APIs. Provider adapter facades remain internal so gateway selection, failover, circuit breaking, limits, OAuth handling, and session binding stay owned by the Rust gateway core.

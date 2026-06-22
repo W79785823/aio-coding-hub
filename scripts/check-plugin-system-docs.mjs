@@ -150,6 +150,10 @@ const requiredDocs = [
       "native",
       "信任边界",
       "性能与稳定性建议",
+      "0.62 does not add public provider plugin APIs",
+    ],
+    caseInsensitivePhrases: [
+      "provider adapter facades remain internal",
     ],
   },
   {
@@ -223,6 +227,13 @@ for (const doc of requiredDocs) {
   const text = readFileSync(fullPath, "utf8");
   for (const phrase of doc.phrases) {
     if (!text.includes(phrase)) {
+      failures.push(`${doc.path}: missing required phrase "${phrase}"`);
+    }
+  }
+
+  const normalizedText = text.toLowerCase();
+  for (const phrase of doc.caseInsensitivePhrases ?? []) {
+    if (!normalizedText.includes(phrase.toLowerCase())) {
       failures.push(`${doc.path}: missing required phrase "${phrase}"`);
     }
   }
