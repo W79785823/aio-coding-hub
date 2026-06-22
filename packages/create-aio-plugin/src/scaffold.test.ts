@@ -230,6 +230,30 @@ describe("create-aio-plugin scaffold", () => {
     ]);
   });
 
+  it("doctor distinguishes empty and non-object plugin.json content", () => {
+    const emptyResult = doctorPluginFiles({ "plugin.json": "" });
+
+    expect(emptyResult.ok).toBe(false);
+    expect(emptyResult.diagnostics).toEqual([
+      expect.objectContaining({
+        severity: "error",
+        code: "PLUGIN_INVALID_MANIFEST_JSON",
+        path: "plugin.json",
+      }),
+    ]);
+
+    const nullResult = doctorPluginFiles({ "plugin.json": "null\n" });
+
+    expect(nullResult.ok).toBe(false);
+    expect(nullResult.diagnostics).toEqual([
+      expect.objectContaining({
+        severity: "error",
+        code: "PLUGIN_INVALID_MANIFEST",
+        path: "plugin.json",
+      }),
+    ]);
+  });
+
   it("doctor reports missing rule files and policy-gated wasm runtime", () => {
     const ruleFiles = createPluginScaffold({
       id: "acme.redactor",

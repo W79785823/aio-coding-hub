@@ -217,7 +217,7 @@ export function doctorPluginFiles(files: ScaffoldFiles, options: DoctorOptions =
   const diagnostics: PluginDiagnostic[] = [];
   const manifestText = files["plugin.json"];
 
-  if (!manifestText) {
+  if (manifestText == null) {
     diagnostics.push({
       severity: "error",
       code: "PLUGIN_MISSING_MANIFEST",
@@ -230,7 +230,18 @@ export function doctorPluginFiles(files: ScaffoldFiles, options: DoctorOptions =
 
   let manifest: PluginManifest;
   try {
-    manifest = JSON.parse(manifestText) as PluginManifest;
+    const parsed = JSON.parse(manifestText) as unknown;
+    if (!asRecord(parsed)) {
+      diagnostics.push({
+        severity: "error",
+        code: "PLUGIN_INVALID_MANIFEST",
+        message: "plugin.json must contain a manifest object",
+        path: "plugin.json",
+        hint: "Fix plugin.json so it matches Plugin API v1.",
+      });
+      return { ok: false, diagnostics };
+    }
+    manifest = parsed as PluginManifest;
   } catch (error) {
     diagnostics.push({
       severity: "error",
