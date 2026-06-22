@@ -1080,10 +1080,19 @@ mod tests {
         PluginDetail, PluginHook, PluginInstallSource, PluginManifest, PluginRuntime, PluginStatus,
         PluginSummary,
     };
+    use crate::gateway::plugins::contract::DEFAULT_HOOK_TIMEOUT_MS;
     use axum::body::Bytes;
     use axum::http::{HeaderMap, Method};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    #[test]
+    fn default_pipeline_timeout_matches_plugin_contract() {
+        assert_eq!(
+            GatewayPluginPipelineConfig::default().hook_timeout,
+            Duration::from_millis(DEFAULT_HOOK_TIMEOUT_MS)
+        );
+    }
 
     fn plugin(plugin_id: &str, priority: i32, permissions: Vec<&str>) -> PluginDetail {
         PluginDetail {
