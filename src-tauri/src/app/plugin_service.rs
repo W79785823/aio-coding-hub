@@ -701,38 +701,18 @@ fn rollback_candidate_installed_dir(
     version: &str,
 ) -> Option<String> {
     let conn = db.open_connection().ok()?;
-    let (current_version_id, current_installed_dir): (i64, Option<String>) = conn
-        .query_row(
-            r#"
-SELECT id, installed_dir
+    conn.query_row(
+        r#"
+SELECT installed_dir
 FROM plugin_versions
 WHERE plugin_id = ?1 AND version = ?2
 "#,
-            rusqlite::params![plugin_id, version],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()
-        .ok()??;
-
-    let previous_installed_dir: Option<Option<String>> = conn
-        .query_row(
-            r#"
-SELECT installed_dir
-FROM plugin_versions
-WHERE plugin_id = ?1 AND id < ?2
-ORDER BY id DESC
-LIMIT 1
-"#,
-            rusqlite::params![plugin_id, current_version_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .ok()?;
-
-    match previous_installed_dir {
-        Some(installed_dir) => installed_dir,
-        None => current_installed_dir,
-    }
+        rusqlite::params![plugin_id, version],
+        |row| row.get(0),
+    )
+    .optional()
+    .ok()?
+    .flatten()
 }
 
 fn diff_hooks(before: &PluginManifest, after: &PluginManifest) -> Vec<PluginLifecycleChange> {
@@ -2866,7 +2846,7 @@ DROP TABLE plugins;
     }
 
     #[test]
-    fn plugin_local_update_preview_reports_rollback_unavailable_when_previous_install_dir_is_missing(
+    fn plugin_local_update_preview_reports_rollback_unavailable_when_current_install_dir_is_missing(
     ) {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
@@ -2914,7 +2894,7 @@ DROP TABLE plugins;
         )
         .unwrap();
 
-        let diff_with_previous_dir = preview_plugin_update_from_local_package(
+        let diff_with_current_dir = preview_plugin_update_from_local_package(
             &db,
             &v3_package,
             &cache_dir,
@@ -2927,13 +2907,13 @@ DROP TABLE plugins;
         )
         .unwrap();
 
-        assert!(diff_with_previous_dir.rollback_available);
+        assert!(diff_with_current_dir.rollback_available);
 
-        let v1_installed_dir = installed_dir.join("local.rollback-preview").join("1.0.0");
-        assert!(v1_installed_dir.is_dir());
-        std::fs::remove_dir_all(&v1_installed_dir).unwrap();
+        let v2_installed_dir = installed_dir.join("local.rollback-preview").join("1.1.0");
+        assert!(v2_installed_dir.is_dir());
+        std::fs::remove_dir_all(&v2_installed_dir).unwrap();
 
-        let diff_without_previous_dir = preview_plugin_update_from_local_package(
+        let diff_without_current_dir = preview_plugin_update_from_local_package(
             &db,
             &v3_package,
             &cache_dir,
@@ -2946,7 +2926,7 @@ DROP TABLE plugins;
         )
         .unwrap();
 
-        assert!(!diff_without_previous_dir.rollback_available);
+        assert!(!diff_without_current_dir.rollback_available);
     }
 
     fn signed_package_policy(
