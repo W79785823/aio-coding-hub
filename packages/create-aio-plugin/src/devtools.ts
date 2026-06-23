@@ -1487,34 +1487,88 @@ function compileReplayRegex(matcher: Record<string, unknown>): RegExp | null {
   if (typeof matcher.regex !== "string") return null;
   const parsed = parseReplayRegexPattern(matcher.regex);
   try {
-    return new RegExp(parsed.pattern, replayRegexFlags(matcher, parsed.flags));
+    return new RegExp(parsed.pattern, replayRegexFlags(matcher, parsed));
   } catch {
     return null;
   }
 }
 
-function parseReplayRegexPattern(regex: string): { pattern: string; flags: Set<string> } {
-  const flags = new Set<string>();
+type ReplayRegexPattern = {
+  pattern: string;
+  enabledFlags: Set<string>;
+  disabledFlags: Set<string>;
+};
+
+function parseReplayRegexPattern(regex: string): ReplayRegexPattern {
+  const enabledFlags = new Set<string>();
+  const disabledFlags = new Set<string>();
   const match = regex.match(/^\(\?([imsux-]+)\)/);
-  if (!match) return { pattern: regex, flags };
+  if (!match) return { pattern: regex, enabledFlags, disabledFlags };
   let enabled = true;
   for (const flag of match[1] ?? "") {
     if (flag === "-") {
       enabled = false;
       continue;
     }
-    if (enabled) flags.add(flag);
+    if (enabled) {
+      enabledFlags.add(flag);
+      disabledFlags.delete(flag);
+    } else {
+      disabledFlags.add(flag);
+      enabledFlags.delete(flag);
+    }
   }
-  return { pattern: regex.slice(match[0].length), flags };
+  const pattern = regex.slice(match[0].length);
+  return {
+    pattern: enabledFlags.has("x") ? stripReplayRegexExtendedWhitespace(pattern) : pattern,
+    enabledFlags,
+    disabledFlags,
+  };
 }
 
-function replayRegexFlags(matcher: Record<string, unknown>, inlineFlags: Set<string>): string {
+function replayRegexFlags(matcher: Record<string, unknown>, parsed: ReplayRegexPattern): string {
   const flags = new Set<string>(["g"]);
-  if (matcher.caseSensitive === false || inlineFlags.has("i")) flags.add("i");
-  if (inlineFlags.has("m")) flags.add("m");
-  if (inlineFlags.has("s")) flags.add("s");
-  if (inlineFlags.has("u")) flags.add("u");
+  if (
+    parsed.enabledFlags.has("i") ||
+    (matcher.caseSensitive === false && !parsed.disabledFlags.has("i"))
+  ) {
+    flags.add("i");
+  }
+  if (parsed.enabledFlags.has("m")) flags.add("m");
+  if (parsed.enabledFlags.has("s")) flags.add("s");
+  if (parsed.enabledFlags.has("u")) flags.add("u");
   return Array.from(flags).join("");
+}
+
+function stripReplayRegexExtendedWhitespace(pattern: string): string {
+  let stripped = "";
+  let escaped = false;
+  let characterClassOpen = false;
+  for (const char of pattern) {
+    if (escaped) {
+      stripped += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      stripped += char;
+      escaped = true;
+      continue;
+    }
+    if (characterClassOpen) {
+      stripped += char;
+      if (char === "]") characterClassOpen = false;
+      continue;
+    }
+    if (char === "[") {
+      stripped += char;
+      characterClassOpen = true;
+      continue;
+    }
+    if (/\s/.test(char)) continue;
+    stripped += char;
+  }
+  return stripped;
 }
 
 function textFromFixture(context: unknown, field: string): string | undefined {

@@ -1646,6 +1646,48 @@ describe("create-aio-plugin scaffold", () => {
     });
   });
 
+  it("replay explain handles Rust extended and disabled inline flags", () => {
+    const extendedFiles = rulePluginFilesWithTarget(undefined);
+    const extendedDocument = JSON.parse(extendedFiles["rules/main.json"] ?? "{}") as {
+      rules?: Array<Record<string, unknown>>;
+    };
+    const extendedRule = extendedDocument.rules?.[0];
+    if (extendedRule) {
+      extendedRule.match = { regex: "(?x)sec ret" };
+    }
+    extendedFiles["rules/main.json"] = `${JSON.stringify(extendedDocument, null, 2)}\n`;
+
+    expect(
+      replayHookExplain(extendedFiles, "gateway.request.afterBodyRead", {
+        request: { body: "secret token" },
+      })
+    ).toMatchObject({
+      matchedRuleIds: ["redact-token-rule"],
+      outputKind: "replace",
+      result: { action: "replace", requestBody: "[REDACTED] token" },
+    });
+
+    const disabledFiles = rulePluginFilesWithTarget(undefined);
+    const disabledDocument = JSON.parse(disabledFiles["rules/main.json"] ?? "{}") as {
+      rules?: Array<Record<string, unknown>>;
+    };
+    const disabledRule = disabledDocument.rules?.[0];
+    if (disabledRule) {
+      disabledRule.match = { regex: "(?-i)secret", caseSensitive: false };
+    }
+    disabledFiles["rules/main.json"] = `${JSON.stringify(disabledDocument, null, 2)}\n`;
+
+    expect(
+      replayHookExplain(disabledFiles, "gateway.request.afterBodyRead", {
+        request: { body: "SECRET token" },
+      })
+    ).toMatchObject({
+      matchedRuleIds: [],
+      outputKind: "pass",
+      result: { action: "pass" },
+    });
+  });
+
   it("replay explain reports block and warn matches without mutations", () => {
     const blockResult = replayHookExplain(
       rulePluginFilesWithAction({ kind: "block", reason: "blocked" }),
