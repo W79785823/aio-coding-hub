@@ -346,7 +346,11 @@ function manifestRuntimeKind(
   manifest: Partial<PluginManifest>
 ): PluginManifest["runtime"]["kind"] | null {
   const runtime = asRecord(manifest.runtime);
-  if (runtime?.kind === "declarativeRules" && Array.isArray(runtime.rules)) {
+  if (
+    runtime?.kind === "declarativeRules" &&
+    Array.isArray(runtime.rules) &&
+    runtime.rules.every((rulePath) => typeof rulePath === "string" && rulePath.length > 0)
+  ) {
     return "declarativeRules";
   }
   if (runtime?.kind === "wasm") {

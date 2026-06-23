@@ -346,6 +346,29 @@ describe("create-aio-plugin scaffold", () => {
     );
   });
 
+  it("doctor rejects non-string declarative rule paths", () => {
+    const files = createPluginScaffold({
+      id: "acme.redactor",
+      name: "Redactor",
+      template: "rule",
+    });
+    const manifest = JSON.parse(files["plugin.json"] ?? "{}") as Record<string, unknown>;
+    manifest.runtime = { kind: "declarativeRules", rules: [0] };
+    files["plugin.json"] = `${JSON.stringify(manifest, null, 2)}\n`;
+    files["0"] = "{}";
+
+    const result = doctorPluginFiles(files);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        code: "PLUGIN_INVALID_RUNTIME",
+        path: "plugin.json#/runtime",
+      })
+    );
+  });
+
   it("doctor command reads a real plugin directory and returns non-zero for errors", () => {
     const root = mkdtempSync(join(tmpdir(), "aio-plugin-doctor-"));
     writeScaffold(root, createPluginScaffold({ id: "acme.real", name: "Real", template: "rule" }));
