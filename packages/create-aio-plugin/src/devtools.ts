@@ -383,6 +383,8 @@ const RULE_TARGET_FIELDS_BY_HOOK: Record<string, readonly string[]> = {
   "gateway.error": ["response.body"],
   "log.beforePersist": ["log.message"],
 };
+const MAX_RULES_PER_RUNTIME = 256;
+const MAX_RULE_REGEX_PATTERN_BYTES = 4 * 1024;
 
 function strictRuleDiagnostics(files: ScaffoldFiles, manifest: PluginManifest): PluginDiagnostic[] {
   const runtime = asRecord(manifest.runtime);
@@ -435,6 +437,17 @@ function strictRuleDiagnostics(files: ScaffoldFiles, manifest: PluginManifest): 
         message: "rule document must contain a rules array",
         path: `${rulePath}#/rules`,
         hint: 'Use { "rules": [...] } as the rule document shape.',
+      });
+      continue;
+    }
+
+    if (document.rules.length > MAX_RULES_PER_RUNTIME) {
+      diagnostics.push({
+        severity: "error",
+        code: "PLUGIN_RULE_TOO_MANY_RULES",
+        message: `rule document has more than ${MAX_RULES_PER_RUNTIME} rules`,
+        path: `${rulePath}#/rules`,
+        hint: `Split this rule document or keep it at ${MAX_RULES_PER_RUNTIME} rules or fewer.`,
       });
       continue;
     }
@@ -506,8 +519,10 @@ function strictRuleDiagnostics(files: ScaffoldFiles, manifest: PluginManifest): 
           code: "PLUGIN_RULE_MATCHER_INVALID",
           message: "rule match.regex must be a string",
           path: `${rulePath}#/rules/${index}/match/regex`,
-          hint: "Use a JavaScript-compatible regex string.",
+          hint: "Use a Rust regex-compatible string.",
         });
+      } else {
+        diagnostics.push(...ruleMatcherDiagnostics(matcher.regex, rulePath, index));
       }
       const action = asRecord(rule.action);
       if (!action) {
@@ -527,6 +542,17 @@ function strictRuleDiagnostics(files: ScaffoldFiles, manifest: PluginManifest): 
           message: "rule target.field must be a string",
           path: `${rulePath}#/rules/${index}/target/field`,
           hint: "Use a hook-visible target field such as request.body.",
+        });
+      }
+      if (target && typeof target.jsonPath === "string") {
+        diagnostics.push(...ruleJsonPathDiagnostics(target.jsonPath, rulePath, index));
+      } else if (target && "jsonPath" in target) {
+        diagnostics.push({
+          severity: "error",
+          code: "PLUGIN_RULE_TARGET_INVALID",
+          message: "rule target.jsonPath must be a string",
+          path: `${rulePath}#/rules/${index}/target/jsonPath`,
+          hint: "Use the host JSONPath subset, for example $.messages[*].content.",
         });
       }
       const actionKind = typeof action?.kind === "string" ? action.kind : "";
@@ -579,6 +605,122 @@ function permissionsForRuleTarget(field: string, actionKind: string): string[] {
     default:
       return mutates ? ["request.body.read", "request.body.write"] : ["request.body.read"];
   }
+}
+
+function ruleMatcherDiagnostics(
+  regex: string,
+  rulePath: string,
+  index: number
+): PluginDiagnostic[] {
+  const path = `${rulePath}#/rules/${index}/match/regex`;
+  if (new TextEncoder().encode(regex).length > MAX_RULE_REGEX_PATTERN_BYTES) {
+    return [
+      {
+        severity: "error",
+        code: "PLUGIN_RULE_MATCHER_INVALID",
+        message: "rule match.regex is too large for the host runtime",
+        path,
+        hint: `Keep regex patterns at ${MAX_RULE_REGEX_PATTERN_BYTES} bytes or fewer.`,
+      },
+    ];
+  }
+  if (usesUnsupportedRustRegexSyntax(regex)) {
+    return [
+      {
+        severity: "error",
+        code: "PLUGIN_RULE_MATCHER_INVALID",
+        message: "rule match.regex uses unsupported Rust regex syntax",
+        path,
+        hint: "Avoid look-around and backreferences; Plugin API v1 declarative rules use Rust regex syntax.",
+      },
+    ];
+  }
+  return [];
+}
+
+function usesUnsupportedRustRegexSyntax(regex: string): boolean {
+  return /\\[1-9]/.test(regex) || /\(\?(?:[=!]|<[=!])/.test(regex);
+}
+
+function ruleJsonPathDiagnostics(
+  jsonPath: string,
+  rulePath: string,
+  index: number
+): PluginDiagnostic[] {
+  const path = `${rulePath}#/rules/${index}/target/jsonPath`;
+  if (!jsonPath.startsWith("$")) {
+    return [
+      {
+        severity: "error",
+        code: "PLUGIN_RULE_TARGET_INVALID",
+        message: `JSON path must start with $: ${jsonPath}`,
+        path,
+        hint: "Use the host JSONPath subset, for example $.messages[*].content.",
+      },
+    ];
+  }
+
+  let cursor = 1;
+  while (cursor < jsonPath.length) {
+    const char = jsonPath[cursor];
+    if (char === ".") {
+      const start = cursor + 1;
+      cursor = start;
+      while (cursor < jsonPath.length && jsonPath[cursor] !== "." && jsonPath[cursor] !== "[") {
+        cursor += 1;
+      }
+      if (start === cursor) {
+        return [
+          {
+            severity: "error",
+            code: "PLUGIN_RULE_TARGET_INVALID",
+            message: `empty JSON path segment: ${jsonPath}`,
+            path,
+            hint: "Use non-empty key segments such as $.messages[*].content.",
+          },
+        ];
+      }
+      const key = jsonPath.slice(start, cursor);
+      if (key.includes('"') || key.includes("'")) {
+        return [
+          {
+            severity: "error",
+            code: "PLUGIN_RULE_TARGET_INVALID",
+            message: `quoted JSON path keys are not supported: ${jsonPath}`,
+            path,
+            hint: "Use dot-separated bare keys such as $.messages.",
+          },
+        ];
+      }
+      continue;
+    }
+    if (char === "[") {
+      if (jsonPath.slice(cursor, cursor + 3) !== "[*]") {
+        return [
+          {
+            severity: "error",
+            code: "PLUGIN_RULE_TARGET_INVALID",
+            message: `only [*] array wildcards are supported: ${jsonPath}`,
+            path,
+            hint: "Use [*] instead of numeric indexes or filters.",
+          },
+        ];
+      }
+      cursor += 3;
+      continue;
+    }
+    return [
+      {
+        severity: "error",
+        code: "PLUGIN_RULE_TARGET_INVALID",
+        message: `unsupported JSON path syntax: ${jsonPath}`,
+        path,
+        hint: "Use dot keys and [*] array wildcards only.",
+      },
+    ];
+  }
+
+  return [];
 }
 
 function ruleActionDiagnostics(
@@ -657,6 +799,30 @@ function ruleActionDiagnostics(
         hint: "Set action.role and action.content.",
       },
     ];
+  }
+  if (actionKind === "appendMessage") {
+    if (action.role !== "system" && action.role !== "developer") {
+      return [
+        {
+          severity: "error",
+          code: "PLUGIN_RULE_ACTION_INVALID",
+          message: "appendMessage role must be system or developer",
+          path: `${path}/role`,
+          hint: "Set action.role to system or developer.",
+        },
+      ];
+    }
+    if (typeof action.content === "string" && action.content.trim().length === 0) {
+      return [
+        {
+          severity: "error",
+          code: "PLUGIN_RULE_ACTION_INVALID",
+          message: "appendMessage content must not be empty",
+          path: `${path}/content`,
+          hint: "Set action.content to a non-empty message.",
+        },
+      ];
+    }
   }
   return [];
 }

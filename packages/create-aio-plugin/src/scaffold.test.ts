@@ -253,6 +253,34 @@ describe("create-aio-plugin scaffold", () => {
     );
   });
 
+  it("validate strict rejects rule documents that exceed the host runtime limit", () => {
+    const files = createPluginScaffold({ id: "acme.real", name: "Real", template: "rule" });
+    files["rules/main.json"] = `${JSON.stringify(
+      {
+        rules: Array.from({ length: 257 }, (_, index) => ({
+          id: `rule-${index}`,
+          hook: "gateway.request.afterBodyRead",
+          target: { field: "request.body" },
+          match: { regex: "SECRET" },
+          action: { kind: "replace", replacement: "[x]" },
+        })),
+      },
+      null,
+      2
+    )}\n`;
+
+    const result = validatePluginFilesStrict(files);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        code: "PLUGIN_RULE_TOO_MANY_RULES",
+        path: "rules/main.json#/rules",
+      })
+    );
+  });
+
   it("validate strict rejects rules whose hook is not declared by the manifest", () => {
     const files = createPluginScaffold({ id: "acme.real", name: "Real", template: "rule" });
     const manifest = JSON.parse(files["plugin.json"] ?? "{}") as {
@@ -431,6 +459,108 @@ describe("create-aio-plugin scaffold", () => {
     );
   });
 
+  it("validate strict rejects regex patterns that the host runtime cannot compile", () => {
+    const files = createPluginScaffold({ id: "acme.real", name: "Real", template: "rule" });
+    files["rules/main.json"] = `${JSON.stringify(
+      {
+        rules: [
+          {
+            id: "lookahead",
+            hook: "gateway.request.afterBodyRead",
+            target: { field: "request.body" },
+            match: { regex: "secret(?=token)" },
+            action: { kind: "replace", replacement: "[x]" },
+          },
+          {
+            id: "oversized",
+            hook: "gateway.request.afterBodyRead",
+            target: { field: "request.body" },
+            match: { regex: "a".repeat(4097) },
+            action: { kind: "replace", replacement: "[x]" },
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`;
+
+    const result = validatePluginFilesStrict(files);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "PLUGIN_RULE_MATCHER_INVALID",
+        path: "rules/main.json#/rules/0/match/regex",
+        message: expect.stringContaining("unsupported Rust regex syntax"),
+      })
+    );
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "PLUGIN_RULE_MATCHER_INVALID",
+        path: "rules/main.json#/rules/1/match/regex",
+        message: expect.stringContaining("too large"),
+      })
+    );
+  });
+
+  it("validate strict rejects target jsonPath syntax that the host runtime cannot parse", () => {
+    const files = createPluginScaffold({ id: "acme.real", name: "Real", template: "rule" });
+    files["rules/main.json"] = `${JSON.stringify(
+      {
+        rules: [
+          {
+            id: "missing-root",
+            hook: "gateway.request.afterBodyRead",
+            target: { field: "request.body", jsonPath: "messages[*].content" },
+            match: { regex: "SECRET" },
+            action: { kind: "replace", replacement: "[x]" },
+          },
+          {
+            id: "numeric-index",
+            hook: "gateway.request.afterBodyRead",
+            target: { field: "request.body", jsonPath: "$.messages[0].content" },
+            match: { regex: "SECRET" },
+            action: { kind: "replace", replacement: "[x]" },
+          },
+          {
+            id: "quoted-key",
+            hook: "gateway.request.afterBodyRead",
+            target: { field: "request.body", jsonPath: '$."messages"' },
+            match: { regex: "SECRET" },
+            action: { kind: "replace", replacement: "[x]" },
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`;
+
+    const result = validatePluginFilesStrict(files);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "PLUGIN_RULE_TARGET_INVALID",
+        path: "rules/main.json#/rules/0/target/jsonPath",
+        message: expect.stringContaining("must start with $"),
+      })
+    );
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "PLUGIN_RULE_TARGET_INVALID",
+        path: "rules/main.json#/rules/1/target/jsonPath",
+        message: expect.stringContaining("only [*] array wildcards"),
+      })
+    );
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "PLUGIN_RULE_TARGET_INVALID",
+        path: "rules/main.json#/rules/2/target/jsonPath",
+        message: expect.stringContaining("quoted JSON path keys"),
+      })
+    );
+  });
+
   it("validate strict rejects unsupported action kinds", () => {
     const files = createPluginScaffold({ id: "acme.real", name: "Real", template: "rule" });
     files["rules/main.json"] = `${JSON.stringify(
@@ -455,6 +585,50 @@ describe("create-aio-plugin scaffold", () => {
       expect.objectContaining({
         code: "PLUGIN_RULE_ACTION_INVALID",
         path: "rules/main.json#/rules/0/action/kind",
+      })
+    );
+  });
+
+  it("validate strict rejects appendMessage payloads that the host runtime rejects", () => {
+    const files = createPluginScaffold({ id: "acme.real", name: "Real", template: "rule" });
+    files["rules/main.json"] = `${JSON.stringify(
+      {
+        rules: [
+          {
+            id: "user-role",
+            hook: "gateway.request.afterBodyRead",
+            target: { field: "request.body" },
+            match: { regex: "SECRET" },
+            action: { kind: "appendMessage", role: "user", content: "hello" },
+          },
+          {
+            id: "blank-content",
+            hook: "gateway.request.afterBodyRead",
+            target: { field: "request.body" },
+            match: { regex: "SECRET" },
+            action: { kind: "appendMessage", role: "developer", content: "   " },
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`;
+
+    const result = validatePluginFilesStrict(files);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "PLUGIN_RULE_ACTION_INVALID",
+        path: "rules/main.json#/rules/0/action/role",
+        message: "appendMessage role must be system or developer",
+      })
+    );
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "PLUGIN_RULE_ACTION_INVALID",
+        path: "rules/main.json#/rules/1/action/content",
+        message: "appendMessage content must not be empty",
       })
     );
   });
