@@ -180,33 +180,6 @@ function runtimeTokens(contract) {
   return [...contract.communityRuntimes, ...contract.policyGatedRuntimes];
 }
 
-function devtoolsPermissionTokens(contract) {
-  const developerToolPermissions = new Set([
-    "request.body.read",
-    "request.body.write",
-    "response.body.read",
-    "response.body.write",
-    "stream.inspect",
-    "stream.modify",
-    "log.redact",
-  ]);
-  return (contract.activePermissions ?? []).filter((permission) =>
-    developerToolPermissions.has(permission)
-  );
-}
-
-function devtoolsMutationFieldTokens(contract) {
-  const developerToolMutationFields = new Set([
-    "requestBody",
-    "responseBody",
-    "streamChunk",
-    "logMessage",
-  ]);
-  return (contract.activeMutationFields ?? []).filter((field) =>
-    developerToolMutationFields.has(field)
-  );
-}
-
 function officialRuntimeTokens(contract) {
   return contract.officialRuntimes.flatMap((runtime) => runtime.split(":"));
 }
@@ -328,7 +301,7 @@ if (contract) {
   requireIncludes(
     "packages/create-aio-plugin/src/devtools.ts",
     devtools,
-    devtoolsPermissionTokens(contract),
+    contract.activePermissions,
     "developer tool active permission"
   );
   requireIncludes(
@@ -340,7 +313,7 @@ if (contract) {
   requireIncludes(
     "packages/create-aio-plugin/src/devtools.ts",
     devtools,
-    devtoolsMutationFieldTokens(contract),
+    contract.activeMutationFields ?? [],
     "developer tool mutation field"
   );
   requireIncludes(

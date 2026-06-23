@@ -413,6 +413,100 @@ if (
   );
 }
 
+const partialDevtoolsMetadataRoot = makeRoot("partial-devtools-metadata");
+writeJson(partialDevtoolsMetadataRoot, "docs/plugins/plugin-api-v1-contract.json", {
+  apiVersion: "1.0.0",
+  defaultHookTimeoutMs: 150,
+  defaultFailurePolicy: "fail-open",
+  activeHooks: ["gateway.request.afterBodyRead"],
+  reservedHooks: ["gateway.response.headers"],
+  activeMutationFields: ["requestBody", "headers"],
+  configSchemaTypes: ["object"],
+  activePermissions: ["request.meta.read", "request.body.read"],
+  reservedPermissions: ["network.fetch"],
+  hookMatrix: {
+    "gateway.request.afterBodyRead": {
+      phase: "after request body read and before upstream provider send",
+      kind: "request",
+      status: "active",
+      defaultFailurePolicy: "fail-open",
+      timeoutMs: 150,
+      reservedHeaderPolicy: "block-gateway-owned",
+      readPermissions: ["request.meta.read", "request.body.read"],
+      writePermissions: [],
+      permissionDependencies: {},
+      mutationFields: ["requestBody", "headers"],
+      contextFields: ["traceId", "request.body"],
+    },
+  },
+  communityRuntimes: ["declarativeRules"],
+  policyGatedRuntimes: ["wasm"],
+  officialRuntimes: ["native:privacyFilter"],
+});
+writePassingScaffold(partialDevtoolsMetadataRoot);
+writeFileSync(
+  join(partialDevtoolsMetadataRoot, "src-tauri/src/gateway/plugins/contract.rs"),
+  [
+    "gateway.request.afterBodyRead gateway.response.headers",
+    "request.meta.read request.body.read network.fetch",
+  ].join("\n")
+);
+writeFileSync(
+  join(partialDevtoolsMetadataRoot, "src-tauri/src/domain/plugins.rs"),
+  [
+    "declarativeRules wasm native privacyFilter",
+    "crate::gateway::plugins::contract::is_active_hook",
+    "crate::gateway::plugins::contract::is_reserved_hook",
+    "crate::gateway::plugins::contract::is_reserved_permission",
+    "crate::gateway::plugins::contract::hook_contract",
+    "pub fn is_active_gateway_hook(hook: &str) -> bool {",
+    '  hook == "gateway.request.afterBodyRead"',
+    "}",
+    'pub fn is_reserved_gateway_hook(hook: &str) -> bool { hook == "gateway.response.headers" }',
+    'pub fn is_reserved_permission(permission: &str) -> bool { permission == "network.fetch" }',
+    "fn permission_risk(permission: &str) { request.meta.read; request.body.read; network.fetch; }",
+    "PLUGIN_RESERVED_HOOK PLUGIN_RESERVED_PERMISSION",
+  ].join("\n")
+);
+writeFileSync(
+  join(partialDevtoolsMetadataRoot, "docs/plugin-manifest-v1.md"),
+  "gateway.request.afterBodyRead gateway.response.headers request.meta.read request.body.read network.fetch"
+);
+writeFileSync(
+  join(partialDevtoolsMetadataRoot, "docs/plugins/reference/permissions.md"),
+  "request.meta.read request.body.read network.fetch"
+);
+writeFileSync(
+  join(partialDevtoolsMetadataRoot, "packages/plugin-wasm-sdk/src/lib.rs"),
+  'request_body headers #[serde(rename_all = "camelCase")]'
+);
+writeFileSync(
+  join(partialDevtoolsMetadataRoot, "packages/create-aio-plugin/src/devtools.ts"),
+  [
+    "gateway.request.afterBodyRead",
+    "request.body.read",
+    "requestBody",
+    "declarativeRules wasm",
+    "PLUGIN_RULE_PERMISSION_MISMATCH PLUGIN_REPLAY_UNSUPPORTED_RUNTIME PLUGIN_WASM_POLICY_GATED",
+    "validatePluginFilesStrict replayHookExplain doctorPluginFiles",
+  ].join("\n")
+);
+
+const partialDevtoolsMetadataResult = runCheck(partialDevtoolsMetadataRoot);
+if (
+  partialDevtoolsMetadataResult.status === 0 ||
+  !partialDevtoolsMetadataResult.stderr.includes(
+    "packages/create-aio-plugin/src/devtools.ts is missing developer tool active permission request.meta.read"
+  ) ||
+  !partialDevtoolsMetadataResult.stderr.includes(
+    "packages/create-aio-plugin/src/devtools.ts is missing developer tool mutation field headers"
+  )
+) {
+  throw new Error(
+    `expected full devtools metadata failure, got status ${partialDevtoolsMetadataResult.status}\n${partialDevtoolsMetadataResult.stderr}`
+  );
+}
+
 const globalPermissionDependencyRoot = makeRoot("global-permission-dependency");
 writeJson(globalPermissionDependencyRoot, "docs/plugins/plugin-api-v1-contract.json", {
   apiVersion: "1.0.0",

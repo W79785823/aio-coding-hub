@@ -12,6 +12,13 @@ import type { GatewayHookName, PluginManifest, ValidationResult } from "@aio-cod
 import { validateManifest } from "@aio-coding-hub/plugin-sdk";
 import { createPluginScaffold, type ScaffoldFiles, type ScaffoldTemplate } from "./scaffold";
 
+type ActivePermission = Exclude<
+  PluginManifest["permissions"][number],
+  "plugin.storage" | "network.fetch" | "file.read" | "file.write" | "secret.read"
+>;
+type DeclarativeRuleMutationField = "requestBody" | "responseBody" | "streamChunk" | "logMessage";
+type ActiveMutationField = DeclarativeRuleMutationField | "headers";
+
 export type PackedPlugin = {
   bytes: Uint8Array;
   checksum: string;
@@ -58,7 +65,7 @@ export type ReplayMutationSummary =
   | { changed: false }
   | {
       changed: true;
-      field: "requestBody" | "responseBody" | "streamChunk" | "logMessage";
+      field: DeclarativeRuleMutationField;
       targetField: string;
       jsonPath?: string;
     };
@@ -87,6 +94,57 @@ export type ReplayRuleTrace = {
 type DoctorOptions = {
   strict?: boolean;
 };
+
+const PLUGIN_API_V1_ACTIVE_PERMISSIONS: readonly ActivePermission[] = [
+  "request.meta.read",
+  "request.header.read",
+  "request.header.readSensitive",
+  "request.header.write",
+  "request.body.read",
+  "request.body.write",
+  "response.header.read",
+  "response.header.write",
+  "response.body.read",
+  "response.body.write",
+  "stream.inspect",
+  "stream.modify",
+  "log.redact",
+];
+const PLUGIN_API_V1_ACTIVE_MUTATION_FIELDS: readonly ActiveMutationField[] = [
+  "requestBody",
+  "responseBody",
+  "streamChunk",
+  "logMessage",
+  "headers",
+];
+const PLUGIN_API_V1_ACTIVE_PERMISSION_SET = new Set<ActivePermission>(
+  PLUGIN_API_V1_ACTIVE_PERMISSIONS
+);
+const PLUGIN_API_V1_ACTIVE_MUTATION_FIELD_SET = new Set<ActiveMutationField>(
+  PLUGIN_API_V1_ACTIVE_MUTATION_FIELDS
+);
+const DECLARATIVE_RULE_TARGETS = declarativeRuleTargets({
+  "request.body": {
+    mutationField: "requestBody",
+    read: "request.body.read",
+    write: "request.body.write",
+  },
+  "response.body": {
+    mutationField: "responseBody",
+    read: "response.body.read",
+    write: "response.body.write",
+  },
+  "stream.chunk": {
+    mutationField: "streamChunk",
+    read: "stream.inspect",
+    write: "stream.modify",
+  },
+  "log.message": {
+    mutationField: "logMessage",
+    read: "log.redact",
+  },
+} as const);
+type DeclarativeRuleTargetField = keyof typeof DECLARATIVE_RULE_TARGETS;
 
 const USAGE = [
   "Usage:",
@@ -415,7 +473,7 @@ function hasPluginFile(files: ScaffoldFiles, path: string): boolean {
   return Object.prototype.hasOwnProperty.call(files, path);
 }
 
-const RULE_TARGET_FIELDS_BY_HOOK: Record<string, readonly string[]> = {
+const RULE_TARGET_FIELDS_BY_HOOK: Record<string, readonly DeclarativeRuleTargetField[]> = {
   "gateway.request.afterBodyRead": ["request.body"],
   "gateway.request.beforeSend": ["request.body"],
   "gateway.response.after": ["response.body"],
@@ -618,7 +676,12 @@ function strictRuleDiagnostics(files: ScaffoldFiles, manifest: PluginManifest): 
       diagnostics.push(...actionDiagnostics);
       const allowedFields = RULE_TARGET_FIELDS_BY_HOOK[hook] ?? [];
       let targetCompatible = true;
-      if (hook && targetField && allowedFields.length > 0 && !allowedFields.includes(targetField)) {
+      if (
+        hook &&
+        targetField &&
+        allowedFields.length > 0 &&
+        !allowedFields.some((field) => field === targetField)
+      ) {
         targetCompatible = false;
         diagnostics.push({
           severity: "error",
@@ -652,17 +715,35 @@ function strictRuleDiagnostics(files: ScaffoldFiles, manifest: PluginManifest): 
 
 function permissionsForRuleTarget(field: string, actionKind: string): string[] {
   const mutates = actionKind === "replace" || actionKind === "appendMessage";
-  switch (field) {
-    case "response.body":
-      return mutates ? ["response.body.read", "response.body.write"] : ["response.body.read"];
-    case "stream.chunk":
-      return mutates ? ["stream.inspect", "stream.modify"] : ["stream.inspect"];
-    case "log.message":
-      return ["log.redact"];
-    case "request.body":
-    default:
-      return mutates ? ["request.body.read", "request.body.write"] : ["request.body.read"];
+  const target = declarativeRuleTarget(field);
+  if (mutates && "write" in target) return [target.read, target.write];
+  return [target.read];
+}
+
+function declarativeRuleTargets<
+  const Targets extends Record<
+    string,
+    { mutationField: ActiveMutationField; read: ActivePermission; write?: ActivePermission }
+  >,
+>(targets: Targets): Targets {
+  for (const [field, target] of Object.entries(targets)) {
+    const writePermission = target.write;
+    if (
+      !PLUGIN_API_V1_ACTIVE_MUTATION_FIELD_SET.has(target.mutationField) ||
+      !PLUGIN_API_V1_ACTIVE_PERMISSION_SET.has(target.read) ||
+      (writePermission !== undefined && !PLUGIN_API_V1_ACTIVE_PERMISSION_SET.has(writePermission))
+    ) {
+      throw new Error(`declarative rule target is not aligned with Plugin API v1: ${field}`);
+    }
   }
+  return targets;
+}
+
+function declarativeRuleTarget(field: string) {
+  return (
+    DECLARATIVE_RULE_TARGETS[field as DeclarativeRuleTargetField] ??
+    DECLARATIVE_RULE_TARGETS["request.body"]
+  );
 }
 
 function ruleMatcherDiagnostics(
