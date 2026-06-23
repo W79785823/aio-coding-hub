@@ -7,6 +7,8 @@ use crate::domain::plugins::{
 };
 use crate::infra::plugins::{package, repository, signing};
 use crate::shared::error::{AppError, AppResult};
+use rusqlite::OptionalExtension;
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 
 const OFFICIAL_PRIVACY_FILTER_ID: &str = "official.privacy-filter";
@@ -199,24 +201,123 @@ fn app_error_message(error: &AppError) -> String {
 }
 
 fn compare_version_direction(from: &str, to: &str) -> String {
-    fn parse(version: &str) -> Option<(u64, u64, u64)> {
-        let core = version.split_once('-').map_or(version, |(core, _)| core);
-        let mut parts = core.split('.');
-        let major = parts.next()?.parse().ok()?;
-        let minor = parts.next()?.parse().ok()?;
-        let patch = parts.next()?.parse().ok()?;
-        if parts.next().is_some() {
-            return None;
-        }
-        Some((major, minor, patch))
-    }
-
-    match (parse(from), parse(to)) {
-        (Some(left), Some(right)) if right > left => "upgrade".to_string(),
-        (Some(left), Some(right)) if right < left => "downgrade".to_string(),
-        (Some(_), Some(_)) => "same".to_string(),
+    match (parse_semver_precedence(from), parse_semver_precedence(to)) {
+        (Some(left), Some(right)) => match compare_semver_precedence(&left, &right) {
+            Ordering::Less => "upgrade".to_string(),
+            Ordering::Greater => "downgrade".to_string(),
+            Ordering::Equal => "same".to_string(),
+        },
         _ => "unknown".to_string(),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SemverPrecedence {
+    core: (u64, u64, u64),
+    prerelease: Vec<SemverPrereleaseIdentifier>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SemverPrereleaseIdentifier {
+    Numeric(u64),
+    Text(String),
+}
+
+fn parse_semver_precedence(version: &str) -> Option<SemverPrecedence> {
+    let version = version.trim();
+    let version = version.split_once('+').map_or(version, |(left, _)| left);
+    let (core, prerelease) = version
+        .split_once('-')
+        .map_or((version, None), |(core, prerelease)| {
+            (core, Some(prerelease))
+        });
+    let mut core_parts = core.split('.');
+    let major = parse_semver_core_number(core_parts.next()?)?;
+    let minor = parse_semver_core_number(core_parts.next()?)?;
+    let patch = parse_semver_core_number(core_parts.next()?)?;
+    if core_parts.next().is_some() {
+        return None;
+    }
+    let prerelease = match prerelease {
+        Some(raw) => parse_semver_prerelease(raw)?,
+        None => Vec::new(),
+    };
+    Some(SemverPrecedence {
+        core: (major, minor, patch),
+        prerelease,
+    })
+}
+
+fn parse_semver_core_number(value: &str) -> Option<u64> {
+    if value.is_empty() || (value.len() > 1 && value.starts_with('0')) {
+        return None;
+    }
+    value.parse::<u64>().ok()
+}
+
+fn parse_semver_prerelease(raw: &str) -> Option<Vec<SemverPrereleaseIdentifier>> {
+    raw.split('.')
+        .map(|identifier| {
+            if identifier.is_empty()
+                || !identifier
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            {
+                return None;
+            }
+            if identifier.bytes().all(|byte| byte.is_ascii_digit()) {
+                if identifier.len() > 1 && identifier.starts_with('0') {
+                    return None;
+                }
+                return identifier
+                    .parse::<u64>()
+                    .ok()
+                    .map(SemverPrereleaseIdentifier::Numeric);
+            }
+            Some(SemverPrereleaseIdentifier::Text(identifier.to_string()))
+        })
+        .collect()
+}
+
+fn compare_semver_precedence(left: &SemverPrecedence, right: &SemverPrecedence) -> Ordering {
+    let core_order = left.core.cmp(&right.core);
+    if core_order != Ordering::Equal {
+        return core_order;
+    }
+    match (left.prerelease.is_empty(), right.prerelease.is_empty()) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => compare_prerelease_identifiers(&left.prerelease, &right.prerelease),
+    }
+}
+
+fn compare_prerelease_identifiers(
+    left: &[SemverPrereleaseIdentifier],
+    right: &[SemverPrereleaseIdentifier],
+) -> Ordering {
+    for (left_identifier, right_identifier) in left.iter().zip(right.iter()) {
+        let order = match (left_identifier, right_identifier) {
+            (
+                SemverPrereleaseIdentifier::Numeric(left_number),
+                SemverPrereleaseIdentifier::Numeric(right_number),
+            ) => left_number.cmp(right_number),
+            (SemverPrereleaseIdentifier::Numeric(_), SemverPrereleaseIdentifier::Text(_)) => {
+                Ordering::Less
+            }
+            (SemverPrereleaseIdentifier::Text(_), SemverPrereleaseIdentifier::Numeric(_)) => {
+                Ordering::Greater
+            }
+            (
+                SemverPrereleaseIdentifier::Text(left_text),
+                SemverPrereleaseIdentifier::Text(right_text),
+            ) => left_text.cmp(right_text),
+        };
+        if order != Ordering::Equal {
+            return order;
+        }
+    }
+    left.len().cmp(&right.len())
 }
 
 fn runtime_lifecycle_summary(manifest: &PluginManifest) -> PluginRuntimeLifecycleSummary {
@@ -583,10 +684,55 @@ fn build_update_diff(
         config_version_change: config_version_change(&current.manifest, manifest),
         compatibility,
         trust: trust_summary(extracted, policy, trust),
-        rollback_available: repository::get_plugin_version(db, &manifest.id, &from_version).is_ok(),
+        rollback_available: rollback_available(db, &manifest.id, &from_version),
         blocking_reasons,
         warnings,
     })
+}
+
+fn rollback_available(db: &crate::db::Db, plugin_id: &str, version: &str) -> bool {
+    rollback_candidate_installed_dir(db, plugin_id, version)
+        .is_some_and(|installed_dir| Path::new(&installed_dir).is_dir())
+}
+
+fn rollback_candidate_installed_dir(
+    db: &crate::db::Db,
+    plugin_id: &str,
+    version: &str,
+) -> Option<String> {
+    let conn = db.open_connection().ok()?;
+    let (current_version_id, current_installed_dir): (i64, Option<String>) = conn
+        .query_row(
+            r#"
+SELECT id, installed_dir
+FROM plugin_versions
+WHERE plugin_id = ?1 AND version = ?2
+"#,
+            rusqlite::params![plugin_id, version],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .ok()??;
+
+    let previous_installed_dir: Option<Option<String>> = conn
+        .query_row(
+            r#"
+SELECT installed_dir
+FROM plugin_versions
+WHERE plugin_id = ?1 AND id < ?2
+ORDER BY id DESC
+LIMIT 1
+"#,
+            rusqlite::params![plugin_id, current_version_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()?;
+
+    match previous_installed_dir {
+        Some(installed_dir) => installed_dir,
+        None => current_installed_dir,
+    }
 }
 
 fn diff_hooks(before: &PluginManifest, after: &PluginManifest) -> Vec<PluginLifecycleChange> {
@@ -2630,6 +2776,177 @@ DROP TABLE plugins;
             change.permission == "request.header.read" && change.change == "added_pending"
         }));
         assert!(diff.blocking_reasons.is_empty());
+    }
+
+    #[test]
+    fn plugin_local_update_preview_reports_prerelease_version_direction() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
+        let cache_dir = dir.path().join("plugins/cache");
+        let installed_dir = dir.path().join("plugins/installed");
+        let rc_package = dir.path().join("prerelease-rc.aio-plugin");
+        write_local_package(
+            &rc_package,
+            local_package_manifest("local.prerelease", "1.0.0-rc.1"),
+        );
+        install_plugin_from_local_package_with_policy(
+            &db,
+            &rc_package,
+            &cache_dir,
+            &installed_dir,
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy {
+                allow_unsigned: true,
+                developer_mode: true,
+                ..LocalPackageInstallPolicy::default()
+            },
+        )
+        .unwrap();
+
+        let release_package = dir.path().join("prerelease-release.aio-plugin");
+        write_local_package(
+            &release_package,
+            local_package_manifest("local.prerelease", "1.0.0"),
+        );
+        let release_diff = preview_plugin_update_from_local_package(
+            &db,
+            &release_package,
+            &cache_dir,
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy {
+                allow_unsigned: true,
+                developer_mode: true,
+                ..LocalPackageInstallPolicy::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(release_diff.from_version, "1.0.0-rc.1");
+        assert_eq!(release_diff.to_version, "1.0.0");
+        assert_eq!(release_diff.version_direction, "upgrade");
+        assert!(release_diff
+            .warnings
+            .iter()
+            .all(|notice| notice.code != "PLUGIN_UPDATE_DOWNGRADE"));
+
+        update_plugin_from_local_package(
+            &db,
+            &release_package,
+            &cache_dir,
+            &installed_dir,
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy {
+                allow_unsigned: true,
+                developer_mode: true,
+                ..LocalPackageInstallPolicy::default()
+            },
+        )
+        .unwrap();
+
+        let rc_diff = preview_plugin_update_from_local_package(
+            &db,
+            &rc_package,
+            &cache_dir,
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy {
+                allow_unsigned: true,
+                developer_mode: true,
+                ..LocalPackageInstallPolicy::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(rc_diff.from_version, "1.0.0");
+        assert_eq!(rc_diff.to_version, "1.0.0-rc.1");
+        assert_eq!(rc_diff.version_direction, "downgrade");
+        assert!(rc_diff
+            .warnings
+            .iter()
+            .any(|notice| notice.code == "PLUGIN_UPDATE_DOWNGRADE"));
+    }
+
+    #[test]
+    fn plugin_local_update_preview_reports_rollback_unavailable_when_previous_install_dir_is_missing(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
+        let cache_dir = dir.path().join("plugins/cache");
+        let installed_dir = dir.path().join("plugins/installed");
+        let v1_package = dir.path().join("rollback-v1.aio-plugin");
+        let v2_package = dir.path().join("rollback-v2.aio-plugin");
+        let v3_package = dir.path().join("rollback-v3.aio-plugin");
+        write_local_package(
+            &v1_package,
+            local_package_manifest("local.rollback-preview", "1.0.0"),
+        );
+        write_local_package(
+            &v2_package,
+            local_package_manifest("local.rollback-preview", "1.1.0"),
+        );
+        write_local_package(
+            &v3_package,
+            local_package_manifest("local.rollback-preview", "1.2.0"),
+        );
+        install_plugin_from_local_package_with_policy(
+            &db,
+            &v1_package,
+            &cache_dir,
+            &installed_dir,
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy {
+                allow_unsigned: true,
+                developer_mode: true,
+                ..LocalPackageInstallPolicy::default()
+            },
+        )
+        .unwrap();
+        update_plugin_from_local_package(
+            &db,
+            &v2_package,
+            &cache_dir,
+            &installed_dir,
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy {
+                allow_unsigned: true,
+                developer_mode: true,
+                ..LocalPackageInstallPolicy::default()
+            },
+        )
+        .unwrap();
+
+        let diff_with_previous_dir = preview_plugin_update_from_local_package(
+            &db,
+            &v3_package,
+            &cache_dir,
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy {
+                allow_unsigned: true,
+                developer_mode: true,
+                ..LocalPackageInstallPolicy::default()
+            },
+        )
+        .unwrap();
+
+        assert!(diff_with_previous_dir.rollback_available);
+
+        let v1_installed_dir = installed_dir.join("local.rollback-preview").join("1.0.0");
+        assert!(v1_installed_dir.is_dir());
+        std::fs::remove_dir_all(&v1_installed_dir).unwrap();
+
+        let diff_without_previous_dir = preview_plugin_update_from_local_package(
+            &db,
+            &v3_package,
+            &cache_dir,
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy {
+                allow_unsigned: true,
+                developer_mode: true,
+                ..LocalPackageInstallPolicy::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!diff_without_previous_dir.rollback_available);
     }
 
     fn signed_package_policy(
