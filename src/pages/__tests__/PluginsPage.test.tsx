@@ -1,11 +1,16 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { PluginsPage } from "../PluginsPage";
-import type { PluginDetail, PluginSummary } from "../../services/plugins";
+import type {
+  PluginDetail,
+  PluginInstallPreview,
+  PluginSummary,
+  PluginUpdateDiff,
+} from "../../services/plugins";
 import { openDesktopSinglePath } from "../../services/desktop/dialog";
 import { createTestQueryClient } from "../../test/utils/reactQuery";
 import {
@@ -14,6 +19,8 @@ import {
   usePluginGrantPermissionsMutation,
   usePluginInstallFromFileMutation,
   usePluginInstallOfficialMutation,
+  usePluginPreviewFromFileMutation,
+  usePluginPreviewUpdateFromFileMutation,
   usePluginQuery,
   usePluginRollbackMutation,
   usePluginSaveConfigMutation,
@@ -48,6 +55,8 @@ vi.mock("../../query/plugins", async () => {
     usePluginQuery: vi.fn(),
     usePluginInstallFromFileMutation: vi.fn(),
     usePluginInstallOfficialMutation: vi.fn(),
+    usePluginPreviewFromFileMutation: vi.fn(),
+    usePluginPreviewUpdateFromFileMutation: vi.fn(),
     usePluginUpdateFromFileMutation: vi.fn(),
     usePluginRollbackMutation: vi.fn(),
     usePluginEnableMutation: vi.fn(),
@@ -122,6 +131,96 @@ function detail(overrides: Partial<PluginDetail> = {}): PluginDetail {
   };
 }
 
+function installPreview(overrides: Partial<PluginInstallPreview> = {}): PluginInstallPreview {
+  return {
+    pluginId: "community.prompt-helper",
+    name: "Community Prompt Helper",
+    version: "1.0.0",
+    source: "local",
+    description: "Helps prompt editing",
+    author: null,
+    homepage: null,
+    repository: null,
+    license: "MIT",
+    category: "productivity",
+    runtime: {
+      kind: "declarativeRules",
+      label: "规则插件",
+      supported: true,
+      blockingReasons: [],
+    },
+    hooks: [{ name: "gateway.request.afterBodyRead", priority: 100, failurePolicy: "fail-open" }],
+    permissions: [{ permission: "request.body.read", risk: "high", granted: false, pending: true }],
+    compatibility: {
+      compatible: true,
+      hostVersion: "0.62.2",
+      appRange: ">=0.56.0 <1.0.0",
+      pluginApiRange: "^1.0.0",
+      platforms: ["macos", "windows", "linux"],
+      blockingReasons: [],
+    },
+    trust: {
+      checksum: "sha256-install",
+      expectedChecksum: null,
+      checksumVerified: false,
+      signatureVerified: false,
+      unsigned: true,
+      developerMode: false,
+    },
+    existingStatus: null,
+    existingVersion: null,
+    blockingReasons: [],
+    warnings: [],
+    ...overrides,
+  };
+}
+
+function updateDiff(overrides: Partial<PluginUpdateDiff> = {}): PluginUpdateDiff {
+  return {
+    pluginId: "community.prompt-helper",
+    fromVersion: "1.0.0",
+    toVersion: "1.1.0",
+    versionDirection: "upgrade",
+    runtimeChange: null,
+    hookChanges: [
+      {
+        name: "gateway.response.beforeSend",
+        change: "added",
+        before: null,
+        after: "priority 50",
+      },
+    ],
+    permissionChanges: [
+      {
+        permission: "request.body.write",
+        risk: "critical",
+        change: "added",
+      },
+    ],
+    configVersionChange: "1 -> 2",
+    compatibility: {
+      compatible: true,
+      hostVersion: "0.62.2",
+      appRange: ">=0.56.0 <1.0.0",
+      pluginApiRange: "^1.0.0",
+      platforms: ["macos", "windows", "linux"],
+      blockingReasons: [],
+    },
+    trust: {
+      checksum: "sha256-update",
+      expectedChecksum: null,
+      checksumVerified: false,
+      signatureVerified: false,
+      unsigned: true,
+      developerMode: false,
+    },
+    rollbackAvailable: true,
+    blockingReasons: [],
+    warnings: [],
+    ...overrides,
+  };
+}
+
 function mutation(overrides: Record<string, unknown> = {}) {
   return {
     mutateAsync: vi.fn().mockResolvedValue(detail()),
@@ -142,6 +241,12 @@ function renderWithProviders(element: ReactElement) {
 describe("pages/PluginsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(usePluginPreviewFromFileMutation).mockReturnValue(
+      mutation({ mutateAsync: vi.fn().mockResolvedValue(installPreview()) }) as any
+    );
+    vi.mocked(usePluginPreviewUpdateFromFileMutation).mockReturnValue(
+      mutation({ mutateAsync: vi.fn().mockResolvedValue(updateDiff()) }) as any
+    );
     vi.mocked(usePluginInstallFromFileMutation).mockReturnValue(mutation() as any);
     vi.mocked(usePluginInstallOfficialMutation).mockReturnValue(mutation() as any);
     vi.mocked(usePluginUpdateFromFileMutation).mockReturnValue(mutation() as any);
@@ -414,9 +519,11 @@ describe("pages/PluginsPage", () => {
   });
 
   it("wires import and enable actions", async () => {
+    const previewMutation = mutation({ mutateAsync: vi.fn().mockResolvedValue(installPreview()) });
     const importMutation = mutation();
     const installOfficialMutation = mutation();
     const enableMutation = mutation();
+    vi.mocked(usePluginPreviewFromFileMutation).mockReturnValue(previewMutation as any);
     vi.mocked(usePluginInstallFromFileMutation).mockReturnValue(importMutation as any);
     vi.mocked(usePluginInstallOfficialMutation).mockReturnValue(installOfficialMutation as any);
     vi.mocked(usePluginEnableMutation).mockReturnValue(enableMutation as any);
@@ -430,6 +537,13 @@ describe("pages/PluginsPage", () => {
 
     renderWithProviders(<PluginsPage />);
     fireEvent.click(screen.getByRole("button", { name: "导入 .aio-plugin" }));
+
+    await screen.findByRole("dialog", { name: "安装前预检" });
+    fireEvent.click(screen.getByRole("button", { name: "确认安装" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "安装前预检" })).not.toBeInTheDocument();
+    });
+
     expect(screen.getByRole("button", { name: /Privacy Filter/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Safety Detector/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Prompt Optimizer/ })).not.toBeInTheDocument();
@@ -440,10 +554,41 @@ describe("pages/PluginsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "启用" }));
 
     await waitFor(() => {
+      expect(previewMutation.mutateAsync).toHaveBeenCalledWith("/tmp/plugin.json");
       expect(importMutation.mutateAsync).toHaveBeenCalledWith("/tmp/plugin.json");
       expect(installOfficialMutation.mutateAsync).toHaveBeenCalledWith("official.privacy-filter");
       expect(enableMutation.mutateAsync).toHaveBeenCalledWith("community.prompt-helper");
       expect(toast.success).toHaveBeenCalled();
+    });
+  });
+
+  it("previews local package before install", async () => {
+    const previewMutation = mutation({ mutateAsync: vi.fn().mockResolvedValue(installPreview()) });
+    const importMutation = mutation();
+    vi.mocked(usePluginPreviewFromFileMutation).mockReturnValue(previewMutation as any);
+    vi.mocked(usePluginInstallFromFileMutation).mockReturnValue(importMutation as any);
+    vi.mocked(usePluginsListQuery).mockReturnValue({
+      data: [summary()],
+      isLoading: false,
+      isFetching: false,
+      error: null,
+    } as any);
+    vi.mocked(openDesktopSinglePath).mockResolvedValue("/tmp/prompt-helper.aio-plugin");
+
+    renderWithProviders(<PluginsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "导入 .aio-plugin" }));
+
+    const previewDialog = await screen.findByRole("dialog", { name: "安装前预检" });
+    expect(within(previewDialog).getByText("Community Prompt Helper")).toBeInTheDocument();
+    expect(within(previewDialog).getByText("sha256-install")).toBeInTheDocument();
+    expect(importMutation.mutateAsync).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "确认安装" }));
+
+    await waitFor(() => {
+      expect(previewMutation.mutateAsync).toHaveBeenCalledWith("/tmp/prompt-helper.aio-plugin");
+      expect(importMutation.mutateAsync).toHaveBeenCalledWith("/tmp/prompt-helper.aio-plugin");
+      expect(toast.success).toHaveBeenCalledWith("导入插件成功");
     });
   });
 
@@ -496,8 +641,12 @@ describe("pages/PluginsPage", () => {
   });
 
   it("shows package risk labels and wires update/rollback actions", async () => {
+    const previewUpdateMutation = mutation({
+      mutateAsync: vi.fn().mockResolvedValue(updateDiff()),
+    });
     const updateMutation = mutation();
     const rollbackMutation = mutation();
+    vi.mocked(usePluginPreviewUpdateFromFileMutation).mockReturnValue(previewUpdateMutation as any);
     vi.mocked(usePluginUpdateFromFileMutation).mockReturnValue(updateMutation as any);
     vi.mocked(usePluginRollbackMutation).mockReturnValue(rollbackMutation as any);
     vi.mocked(usePluginsListQuery).mockReturnValue({
@@ -554,12 +703,20 @@ describe("pages/PluginsPage", () => {
     renderWithProviders(<PluginsPage />);
     fireEvent.click(screen.getAllByText("Community Redactor")[0]);
     fireEvent.click(screen.getByRole("button", { name: "更新" }));
+    await screen.findByRole("dialog", { name: "更新预检" });
+    fireEvent.click(screen.getByRole("button", { name: "确认更新" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "更新预检" })).not.toBeInTheDocument();
+    });
     fireEvent.click(screen.getByRole("button", { name: "回滚 1.0.0" }));
 
     await waitFor(() => {
       expect(screen.getAllByText("未签名").length).toBeGreaterThan(0);
       expect(screen.getByText("已隔离")).toBeInTheDocument();
       expect(screen.getByText("revoked by market")).toBeInTheDocument();
+      expect(previewUpdateMutation.mutateAsync).toHaveBeenCalledWith(
+        "/tmp/community-redactor-1.1.0.aio-plugin"
+      );
       expect(updateMutation.mutateAsync).toHaveBeenCalledWith(
         "/tmp/community-redactor-1.1.0.aio-plugin"
       );
@@ -567,6 +724,50 @@ describe("pages/PluginsPage", () => {
         pluginId: "community.redactor",
         version: "1.0.0",
       });
+    });
+  });
+
+  it("shows update diff before applying update", async () => {
+    const previewUpdateMutation = mutation({
+      mutateAsync: vi.fn().mockResolvedValue(updateDiff()),
+    });
+    const updateMutation = mutation();
+    vi.mocked(usePluginPreviewUpdateFromFileMutation).mockReturnValue(previewUpdateMutation as any);
+    vi.mocked(usePluginUpdateFromFileMutation).mockReturnValue(updateMutation as any);
+    vi.mocked(usePluginsListQuery).mockReturnValue({
+      data: [summary({ update_available: true })],
+      isLoading: false,
+      isFetching: false,
+      error: null,
+    } as any);
+    vi.mocked(usePluginQuery).mockReturnValue({
+      data: detail({
+        summary: summary({ update_available: true }),
+      }),
+      isLoading: false,
+      isFetching: false,
+      error: null,
+    } as any);
+    vi.mocked(openDesktopSinglePath).mockResolvedValue("/tmp/prompt-helper-1.1.0.aio-plugin");
+
+    renderWithProviders(<PluginsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "更新" }));
+
+    const updateDialog = await screen.findByRole("dialog", { name: "更新预检" });
+    expect(within(updateDialog).getByText("1.0.0 -> 1.1.0")).toBeInTheDocument();
+    expect(within(updateDialog).getByText("gateway.response.beforeSend")).toBeInTheDocument();
+    expect(updateMutation.mutateAsync).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "确认更新" }));
+
+    await waitFor(() => {
+      expect(previewUpdateMutation.mutateAsync).toHaveBeenCalledWith(
+        "/tmp/prompt-helper-1.1.0.aio-plugin"
+      );
+      expect(updateMutation.mutateAsync).toHaveBeenCalledWith(
+        "/tmp/prompt-helper-1.1.0.aio-plugin"
+      );
+      expect(toast.success).toHaveBeenCalledWith("更新插件成功");
     });
   });
 

@@ -240,6 +240,10 @@ export const pluginKeys = {
   all: pluginsAllKey,
   list: () => [...pluginsAllKey, "list"] as const,
   detail: (pluginId: string | null) => [...pluginsAllKey, "detail", pluginId] as const,
+  installPreview: (filePath: string | null) =>
+    [...pluginsAllKey, "installPreview", filePath] as const,
+  updatePreview: (filePath: string | null) =>
+    [...pluginsAllKey, "updatePreview", filePath] as const,
   auditLogs: (pluginId: string | null, limit: number | null) =>
     [...pluginsAllKey, "auditLogs", pluginId, limit] as const,
 };

@@ -12,6 +12,8 @@ import {
   pluginInstallOfficial,
   pluginList,
   pluginListAuditLogs,
+  pluginPreviewFromFile,
+  pluginPreviewUpdateFromFile,
   pluginQuarantineRevoked,
   pluginRevokePermission,
   pluginRollback,
@@ -94,6 +96,28 @@ export function usePluginInstallFromFileMutation() {
       );
       queryClient.setQueryData(pluginKeys.detail(next.summary.plugin_id), next);
       refreshPluginQueries(queryClient, next.summary.plugin_id);
+    },
+  });
+}
+
+export function usePluginPreviewFromFileMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (filePath: string) => pluginPreviewFromFile(filePath),
+    onSuccess: (next, filePath) => {
+      queryClient.setQueryData(pluginKeys.installPreview(filePath), next);
+    },
+  });
+}
+
+export function usePluginPreviewUpdateFromFileMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (filePath: string) => pluginPreviewUpdateFromFile(filePath),
+    onSuccess: (next, filePath) => {
+      queryClient.setQueryData(pluginKeys.updatePreview(filePath), next);
     },
   });
 }

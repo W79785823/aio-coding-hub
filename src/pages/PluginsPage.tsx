@@ -5,7 +5,6 @@ import { toast } from "sonner";
 import {
   Copy,
   Download,
-  RotateCcw,
   Upload,
   Power,
   PowerOff,
@@ -18,9 +17,11 @@ import { openDesktopSinglePath } from "../services/desktop/dialog";
 import type {
   JsonValue,
   PluginDetail,
+  PluginInstallPreview,
   PluginPermissionRisk,
   PluginStatus,
   PluginSummary,
+  PluginUpdateDiff,
 } from "../services/plugins";
 import { formatActionFailureToast, formatUnknownError } from "../utils/errors";
 import { Button } from "../ui/Button";
@@ -32,6 +33,8 @@ import {
   usePluginGrantPermissionsMutation,
   usePluginInstallFromFileMutation,
   usePluginInstallOfficialMutation,
+  usePluginPreviewFromFileMutation,
+  usePluginPreviewUpdateFromFileMutation,
   usePluginQuery,
   usePluginRollbackMutation,
   usePluginSaveConfigMutation,
@@ -40,6 +43,9 @@ import {
   usePluginsListQuery,
 } from "../query/plugins";
 import { PluginConfigSchemaForm } from "./plugins/PluginConfigSchemaForm";
+import { PluginInstallPreviewDialog } from "./plugins/PluginInstallPreviewDialog";
+import { PluginLifecyclePanel } from "./plugins/PluginLifecyclePanel";
+import { PluginUpdatePreviewDialog } from "./plugins/PluginUpdatePreviewDialog";
 import {
   describePluginPermission,
   describePluginRuntime,
@@ -426,19 +432,15 @@ function PluginDetailPanel({
               更新
             </Button>
           ) : null}
-          {rollbackVersion ? (
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={busy}
-              onClick={() => onRollback(rollbackVersion)}
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              回滚 {rollbackVersion}
-            </Button>
-          ) : null}
         </div>
       </div>
+
+      <PluginLifecyclePanel
+        detail={detail}
+        rollbackVersion={rollbackVersion}
+        busy={busy}
+        onRollback={onRollback}
+      />
 
       <Section title="这个插件会做什么">
         <div className="rounded-md border border-border px-3 py-2 text-sm">
@@ -509,6 +511,16 @@ export function PluginsPage() {
   const listQuery = usePluginsListQuery();
   const plugins = useMemo(() => listQuery.data ?? [], [listQuery.data]);
   const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
+  const [installPreviewState, setInstallPreviewState] = useState<{
+    filePath: string;
+    preview: PluginInstallPreview;
+  } | null>(null);
+  const [updatePreviewState, setUpdatePreviewState] = useState<{
+    filePath: string;
+    diff: PluginUpdateDiff;
+  } | null>(null);
+  const previewInstallMutation = usePluginPreviewFromFileMutation();
+  const previewUpdateMutation = usePluginPreviewUpdateFromFileMutation();
   const installMutation = usePluginInstallFromFileMutation();
   const installOfficialMutation = usePluginInstallOfficialMutation();
   const updateMutation = usePluginUpdateFromFileMutation();
@@ -531,6 +543,8 @@ export function PluginsPage() {
   );
   const detailQuery = usePluginQuery(selectedPluginId, { enabled: Boolean(selectedPluginId) });
   const busy =
+    previewInstallMutation.isPending ||
+    previewUpdateMutation.isPending ||
     installMutation.isPending ||
     installOfficialMutation.isPending ||
     updateMutation.isPending ||
@@ -545,8 +559,10 @@ export function PluginsPage() {
     try {
       await task();
       toast.success(`${action}成功`);
+      return true;
     } catch (error) {
       toast.error(formatActionFailureToast(action, error).toast);
+      return false;
     }
   }
 
@@ -556,7 +572,12 @@ export function PluginsPage() {
       filters: [{ name: "AIO plugin package", extensions: ["aio-plugin"] }],
     });
     if (!filePath) return;
-    await runAction("导入插件", () => installMutation.mutateAsync(filePath));
+    try {
+      const preview = await previewInstallMutation.mutateAsync(filePath);
+      setInstallPreviewState({ filePath, preview });
+    } catch (error) {
+      toast.error(formatActionFailureToast("预览插件", error).toast);
+    }
   }
 
   async function handleUpdate() {
@@ -565,7 +586,28 @@ export function PluginsPage() {
       filters: [{ name: "AIO plugin package", extensions: ["aio-plugin"] }],
     });
     if (!filePath) return;
-    await runAction("更新插件", () => updateMutation.mutateAsync(filePath));
+    try {
+      const diff = await previewUpdateMutation.mutateAsync(filePath);
+      setUpdatePreviewState({ filePath, diff });
+    } catch (error) {
+      toast.error(formatActionFailureToast("预览更新", error).toast);
+    }
+  }
+
+  async function confirmInstallPreview() {
+    if (!installPreviewState) return;
+    const done = await runAction("导入插件", () =>
+      installMutation.mutateAsync(installPreviewState.filePath)
+    );
+    if (done) setInstallPreviewState(null);
+  }
+
+  async function confirmUpdatePreview() {
+    if (!updatePreviewState) return;
+    const done = await runAction("更新插件", () =>
+      updateMutation.mutateAsync(updatePreviewState.filePath)
+    );
+    if (done) setUpdatePreviewState(null);
   }
 
   if (listQuery.isLoading) {
@@ -577,116 +619,135 @@ export function PluginsPage() {
   }
 
   return (
-    <div className="flex h-full flex-col gap-5 overflow-hidden">
-      <PageHeader
-        title="插件"
-        subtitle="为 AIO Coding Hub 增加本地能力。插件可以在请求发送前、响应返回后或日志保存前处理内容。"
-        actions={
-          <Button onClick={handleImport} disabled={busy}>
-            <Download className="h-4 w-4" />
-            导入 .aio-plugin
-          </Button>
-        }
-      />
-
-      {listQuery.error ? (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          插件列表加载失败：{formatUnknownError(listQuery.error)}
-        </div>
-      ) : null}
-
-      <div className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
-        <span className="text-xs font-semibold text-muted-foreground">推荐插件</span>
-        {OFFICIAL_PLUGINS.map((plugin) => {
-          const installed = plugins.some((item) => item.plugin_id === plugin.id);
-          return (
-            <Button
-              key={plugin.id}
-              size="sm"
-              variant="secondary"
-              disabled={busy || installed}
-              onClick={() =>
-                runAction("安装官方插件", () => installOfficialMutation.mutateAsync(plugin.id))
-              }
-            >
-              <Download className="h-3.5 w-3.5" />
-              {installed ? "已安装" : plugin.name}
+    <>
+      <div className="flex h-full flex-col gap-5 overflow-hidden">
+        <PageHeader
+          title="插件"
+          subtitle="为 AIO Coding Hub 增加本地能力。插件可以在请求发送前、响应返回后或日志保存前处理内容。"
+          actions={
+            <Button onClick={handleImport} disabled={busy}>
+              <Download className="h-4 w-4" />
+              导入 .aio-plugin
             </Button>
-          );
-        })}
+          }
+        />
+
+        {listQuery.error ? (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            插件列表加载失败：{formatUnknownError(listQuery.error)}
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
+          <span className="text-xs font-semibold text-muted-foreground">推荐插件</span>
+          {OFFICIAL_PLUGINS.map((plugin) => {
+            const installed = plugins.some((item) => item.plugin_id === plugin.id);
+            return (
+              <Button
+                key={plugin.id}
+                size="sm"
+                variant="secondary"
+                disabled={busy || installed}
+                onClick={() =>
+                  runAction("安装官方插件", () => installOfficialMutation.mutateAsync(plugin.id))
+                }
+              >
+                <Download className="h-3.5 w-3.5" />
+                {installed ? "已安装" : plugin.name}
+              </Button>
+            );
+          })}
+        </div>
+
+        {plugins.length === 0 && !listQuery.error ? (
+          <div className="rounded-lg border border-dashed border-border px-4 py-10 text-center">
+            <div className="text-sm font-semibold text-foreground">还没有安装插件</div>
+            <div className="mt-1 text-sm text-muted-foreground">
+              可以安装官方 Privacy Filter，或导入 .aio-plugin 插件包。
+            </div>
+          </div>
+        ) : (
+          <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(360px,0.9fr)_minmax(0,1.1fr)]">
+            <div className="min-h-0 overflow-y-auto pr-1 scrollbar-overlay">
+              <div className="space-y-3">
+                {plugins.map((plugin) => (
+                  <PluginListRow
+                    key={plugin.plugin_id}
+                    plugin={plugin}
+                    active={plugin.plugin_id === selectedPluginId}
+                    busy={busy}
+                    onSelect={() => setSelectedPluginId(plugin.plugin_id)}
+                    onEnable={() =>
+                      runAction("启用插件", () => enableMutation.mutateAsync(plugin.plugin_id))
+                    }
+                    onDisable={() =>
+                      runAction("禁用插件", () => disableMutation.mutateAsync(plugin.plugin_id))
+                    }
+                    onUninstall={() =>
+                      runAction("卸载插件", () => uninstallMutation.mutateAsync(plugin.plugin_id))
+                    }
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="min-h-0 overflow-y-auto rounded-lg border border-border bg-card p-4 scrollbar-overlay">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold text-foreground">
+                    {selectedSummary?.name ?? "插件详情"}
+                  </div>
+                  <div className="font-mono text-xs text-muted-foreground">
+                    {selectedSummary?.plugin_id ?? "-"}
+                  </div>
+                </div>
+                {detailQuery.isFetching ? <RefreshCw className="h-4 w-4 animate-spin" /> : null}
+              </div>
+              <PluginDetailPanel
+                detail={detailQuery.data}
+                loading={detailQuery.isLoading}
+                savingConfig={saveConfigMutation.isPending}
+                busy={busy}
+                onUpdate={handleUpdate}
+                onRollback={(version) => {
+                  if (!selectedPluginId) return;
+                  runAction("回滚插件", () =>
+                    rollbackMutation.mutateAsync({ pluginId: selectedPluginId, version })
+                  );
+                }}
+                onSaveConfig={(config) => {
+                  if (!selectedPluginId) return;
+                  runAction("保存配置", () =>
+                    saveConfigMutation.mutateAsync({ pluginId: selectedPluginId, config })
+                  );
+                }}
+                onGrantPendingPermissions={(pluginId, permissions) => {
+                  runAction("授权权限", () =>
+                    grantPermissionsMutation.mutateAsync({ pluginId, permissions })
+                  );
+                }}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
-      {plugins.length === 0 && !listQuery.error ? (
-        <div className="rounded-lg border border-dashed border-border px-4 py-10 text-center">
-          <div className="text-sm font-semibold text-foreground">还没有安装插件</div>
-          <div className="mt-1 text-sm text-muted-foreground">
-            可以安装官方 Privacy Filter，或导入 .aio-plugin 插件包。
-          </div>
-        </div>
-      ) : (
-        <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(360px,0.9fr)_minmax(0,1.1fr)]">
-          <div className="min-h-0 overflow-y-auto pr-1 scrollbar-overlay">
-            <div className="space-y-3">
-              {plugins.map((plugin) => (
-                <PluginListRow
-                  key={plugin.plugin_id}
-                  plugin={plugin}
-                  active={plugin.plugin_id === selectedPluginId}
-                  busy={busy}
-                  onSelect={() => setSelectedPluginId(plugin.plugin_id)}
-                  onEnable={() =>
-                    runAction("启用插件", () => enableMutation.mutateAsync(plugin.plugin_id))
-                  }
-                  onDisable={() =>
-                    runAction("禁用插件", () => disableMutation.mutateAsync(plugin.plugin_id))
-                  }
-                  onUninstall={() =>
-                    runAction("卸载插件", () => uninstallMutation.mutateAsync(plugin.plugin_id))
-                  }
-                />
-              ))}
-            </div>
-          </div>
-
-          <div className="min-h-0 overflow-y-auto rounded-lg border border-border bg-card p-4 scrollbar-overlay">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <div className="text-sm font-semibold text-foreground">
-                  {selectedSummary?.name ?? "插件详情"}
-                </div>
-                <div className="font-mono text-xs text-muted-foreground">
-                  {selectedSummary?.plugin_id ?? "-"}
-                </div>
-              </div>
-              {detailQuery.isFetching ? <RefreshCw className="h-4 w-4 animate-spin" /> : null}
-            </div>
-            <PluginDetailPanel
-              detail={detailQuery.data}
-              loading={detailQuery.isLoading}
-              savingConfig={saveConfigMutation.isPending}
-              busy={busy}
-              onUpdate={handleUpdate}
-              onRollback={(version) => {
-                if (!selectedPluginId) return;
-                runAction("回滚插件", () =>
-                  rollbackMutation.mutateAsync({ pluginId: selectedPluginId, version })
-                );
-              }}
-              onSaveConfig={(config) => {
-                if (!selectedPluginId) return;
-                runAction("保存配置", () =>
-                  saveConfigMutation.mutateAsync({ pluginId: selectedPluginId, config })
-                );
-              }}
-              onGrantPendingPermissions={(pluginId, permissions) => {
-                runAction("授权权限", () =>
-                  grantPermissionsMutation.mutateAsync({ pluginId, permissions })
-                );
-              }}
-            />
-          </div>
-        </div>
-      )}
-    </div>
+      <PluginInstallPreviewDialog
+        open={installPreviewState != null}
+        preview={installPreviewState?.preview ?? null}
+        filePath={installPreviewState?.filePath ?? null}
+        confirming={installMutation.isPending}
+        onClose={() => setInstallPreviewState(null)}
+        onConfirm={confirmInstallPreview}
+      />
+      <PluginUpdatePreviewDialog
+        open={updatePreviewState != null}
+        diff={updatePreviewState?.diff ?? null}
+        filePath={updatePreviewState?.filePath ?? null}
+        confirming={updateMutation.isPending}
+        onClose={() => setUpdatePreviewState(null)}
+        onConfirm={confirmUpdatePreview}
+      />
+    </>
   );
 }
