@@ -517,6 +517,34 @@ describe("create-aio-plugin scaffold", () => {
     );
   });
 
+  it("doctor does not use malformed wasm entry values as file paths", () => {
+    const files = createPluginScaffold({
+      id: "acme.policy",
+      name: "Policy",
+      template: "wasm",
+    });
+    const manifest = JSON.parse(files["plugin.json"] ?? "{}") as Record<string, unknown>;
+    manifest.entry = 42;
+    files["plugin.json"] = `${JSON.stringify(manifest, null, 2)}\n`;
+    files["42"] = "";
+
+    const result = doctorPluginFiles(files);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "PLUGIN_INVALID_MANIFEST",
+        path: "plugin.json#/entry",
+      })
+    );
+    expect(result.diagnostics).not.toContainEqual(
+      expect.objectContaining({
+        code: "PLUGIN_WASM_ENTRY_MISSING",
+        path: 42,
+      })
+    );
+  });
+
   it("doctor command reads a real plugin directory and returns non-zero for errors", () => {
     const root = mkdtempSync(join(tmpdir(), "aio-plugin-doctor-"));
     writeScaffold(root, createPluginScaffold({ id: "acme.real", name: "Real", template: "rule" }));

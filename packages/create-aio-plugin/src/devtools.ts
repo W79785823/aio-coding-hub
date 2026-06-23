@@ -298,7 +298,7 @@ export function doctorPluginFiles(files: ScaffoldFiles, options: DoctorOptions =
   }
 
   if (runtimeKind === "wasm") {
-    const entry = manifest.entry ?? "plugin.wasm";
+    const entry = typeof manifest.entry === "string" ? manifest.entry : "plugin.wasm";
     if (!hasPluginFile(files, entry)) {
       diagnostics.push({
         severity: "error",
