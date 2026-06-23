@@ -2,6 +2,8 @@
 
 use crate::shared::fs::{read_optional_file_with_max_len, write_file_atomic_if_changed};
 use serde::Serialize;
+#[cfg(not(windows))]
+use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -446,6 +448,24 @@ fn platform_extra_path_dirs() -> &'static [&'static str] {
     }
 }
 
+#[cfg(not(windows))]
+fn version_probe_path(
+    exe: &Path,
+    current_path: Option<&OsStr>,
+) -> crate::shared::error::AppResult<OsString> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    if let Some(parent) = exe.parent().filter(|p| !p.as_os_str().is_empty()) {
+        paths.push(parent.to_path_buf());
+    }
+    paths.extend(platform_extra_path_dirs().iter().map(PathBuf::from));
+    if let Some(current_path) = current_path {
+        paths.extend(std::env::split_paths(current_path));
+    }
+
+    std::env::join_paths(paths)
+        .map_err(|err| format!("failed to build PATH for version probe: {err}").into())
+}
+
 fn find_exe_in_path(names: &[String]) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     let raw = path.to_string_lossy().to_string();
@@ -609,13 +629,14 @@ fn run_version(exe: &Path) -> crate::shared::error::AppResult<String> {
     // GUI-launched processes on macOS/Linux inherit a minimal PATH that often
     // lacks Homebrew / nvm / system dirs. Prepend the standard locations so that
     // shebang-based CLIs (#!/usr/bin/env node) can resolve their runtime.
+    //
+    // Crucially, include the executable's own parent directory: version managers
+    // (nvm, volta, fnm, asdf) place both `node` and global npm packages in the
+    // same bin dir, so adding it ensures `#!/usr/bin/env node` resolves.
     #[cfg(not(windows))]
     {
-        let extra = platform_extra_path_dirs().join(":");
-        cmd.env(
-            "PATH",
-            format!("{}:{}", extra, std::env::var("PATH").unwrap_or_default()),
-        );
+        let current_path = std::env::var_os("PATH");
+        cmd.env("PATH", version_probe_path(exe, current_path.as_deref())?);
     }
 
     #[cfg(windows)]
@@ -841,5 +862,51 @@ mod tests {
             .to_string();
 
         assert!(err.contains("claude/settings.json too large"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_version_resolves_shebang_interpreter_from_exe_parent_dir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir(&bin_dir).expect("create bin dir");
+
+        // Create a fake "node" interpreter that just prints a version string.
+        let node_path = bin_dir.join("node");
+        fs::write(&node_path, "#!/bin/sh\necho \"v20.0.0\"\n").expect("write fake node");
+        fs::set_permissions(&node_path, fs::Permissions::from_mode(0o755))
+            .expect("chmod fake node");
+
+        // Create a fake CLI script with #!/usr/bin/env node shebang.
+        let cli_path = bin_dir.join("fakecli");
+        fs::write(&cli_path, "#!/usr/bin/env node\nconsole.log(\"1.2.3\")\n")
+            .expect("write fake cli");
+        fs::set_permissions(&cli_path, fs::Permissions::from_mode(0o755)).expect("chmod fake cli");
+
+        // run_version should use the fake node from exe's parent dir, not any
+        // node inherited from the developer machine PATH.
+        assert_eq!(run_version(&cli_path).expect("run version"), "v20.0.0");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn version_probe_path_prepends_exe_parent_and_preserves_existing_path() {
+        let dir = tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        let exe = bin_dir.join("fakecli");
+        let existing_path =
+            std::env::join_paths([PathBuf::from("/usr/bin"), PathBuf::from("/bin")])
+                .expect("join fixture path");
+
+        let path = version_probe_path(&exe, Some(existing_path.as_os_str())).expect("probe path");
+        let entries: Vec<PathBuf> = std::env::split_paths(&path).collect();
+
+        assert_eq!(entries.first(), Some(&bin_dir));
+        for dir in platform_extra_path_dirs() {
+            assert!(entries.contains(&PathBuf::from(dir)));
+        }
+        assert!(entries.ends_with(&[PathBuf::from("/usr/bin"), PathBuf::from("/bin")]));
     }
 }
