@@ -523,7 +523,7 @@ function strictRuleDiagnostics(files: ScaffoldFiles, manifest: PluginManifest): 
       diagnostics.push(...ruleActionDiagnostics(action, actionKind, rulePath, index));
       const allowedFields = RULE_TARGET_FIELDS_BY_HOOK[hook] ?? [];
       let targetCompatible = true;
-      if (hook && allowedFields.length > 0 && !allowedFields.includes(targetField)) {
+      if (hook && targetField && allowedFields.length > 0 && !allowedFields.includes(targetField)) {
         targetCompatible = false;
         diagnostics.push({
           severity: "error",
@@ -586,6 +586,17 @@ function ruleActionDiagnostics(
         severity: "error",
         code: "PLUGIN_RULE_ACTION_INVALID",
         message: "rule action.kind must be a string",
+        path: `${path}/kind`,
+        hint: "Use replace, block, warn, or appendMessage.",
+      },
+    ];
+  }
+  if (!["replace", "block", "warn", "appendMessage"].includes(actionKind)) {
+    return [
+      {
+        severity: "error",
+        code: "PLUGIN_RULE_ACTION_INVALID",
+        message: `unsupported rule action kind: ${actionKind}`,
         path: `${path}/kind`,
         hint: "Use replace, block, warn, or appendMessage.",
       },

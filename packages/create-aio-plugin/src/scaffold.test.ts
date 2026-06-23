@@ -328,6 +328,12 @@ describe("create-aio-plugin scaffold", () => {
         path: "rules/main.json#/rules/0/target",
       })
     );
+    expect(result.diagnostics).not.toContainEqual(
+      expect.objectContaining({
+        code: "PLUGIN_RULE_TARGET_INCOMPATIBLE_WITH_HOOK",
+        path: "rules/main.json#/rules/0/target/field",
+      })
+    );
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({
         code: "PLUGIN_RULE_MATCHER_MISSING",
@@ -390,6 +396,34 @@ describe("create-aio-plugin scaffold", () => {
       expect.objectContaining({
         code: "PLUGIN_RULE_ACTION_INVALID",
         path: "rules/main.json#/rules/2/action/message",
+      })
+    );
+  });
+
+  it("validate strict rejects unsupported action kinds", () => {
+    const files = createPluginScaffold({ id: "acme.real", name: "Real", template: "rule" });
+    files["rules/main.json"] = `${JSON.stringify(
+      {
+        rules: [
+          {
+            hook: "gateway.request.afterBodyRead",
+            target: { field: "request.body" },
+            match: { regex: "SECRET" },
+            action: { kind: "drop" },
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`;
+
+    const result = validatePluginFilesStrict(files);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "PLUGIN_RULE_ACTION_INVALID",
+        path: "rules/main.json#/rules/0/action/kind",
       })
     );
   });
