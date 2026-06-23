@@ -1725,6 +1725,34 @@ describe("create-aio-plugin scaffold", () => {
     });
   });
 
+  it("replay handles Rust Unicode property classes without false passing", () => {
+    const files = rulePluginFilesWithTarget(undefined);
+    const document = JSON.parse(files["rules/main.json"] ?? "{}") as {
+      rules?: Array<Record<string, unknown>>;
+    };
+    const rule = document.rules?.[0];
+    if (rule) {
+      rule.match = { regex: "\\p{L}+" };
+    }
+    files["rules/main.json"] = `${JSON.stringify(document, null, 2)}\n`;
+
+    expect(
+      replayHookExplain(files, "gateway.request.afterBodyRead", {
+        request: { body: "é token" },
+      })
+    ).toMatchObject({
+      matchedRuleIds: ["redact-token-rule"],
+      outputKind: "replace",
+      result: { action: "replace", requestBody: "[REDACTED] [REDACTED]" },
+    });
+    expect(
+      replayHook(files, "gateway.request.afterBodyRead", { request: { body: "é token" } })
+    ).toEqual({
+      action: "replace",
+      requestBody: "[REDACTED] [REDACTED]",
+    });
+  });
+
   it("replay explain reports block and warn matches without mutations", () => {
     const blockResult = replayHookExplain(
       rulePluginFilesWithAction({ kind: "block", reason: "blocked" }),

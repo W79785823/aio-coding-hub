@@ -1562,7 +1562,7 @@ function replayRegexFlags(matcher: Record<string, unknown>, parsed: ReplayRegexP
   }
   if (parsed.enabledFlags.has("m")) flags.add("m");
   if (parsed.enabledFlags.has("s")) flags.add("s");
-  if (parsed.enabledFlags.has("u")) flags.add("u");
+  if (parsed.enabledFlags.has("u") || usesUnicodePropertyEscape(parsed.pattern)) flags.add("u");
   return Array.from(flags).join("");
 }
 
@@ -1572,6 +1572,10 @@ function hasInlineFlagToggle(pattern: string): boolean {
 
 function hasUnsupportedExtendedReplayPattern(pattern: string, enabledFlags: Set<string>): boolean {
   return enabledFlags.has("x") && (pattern.includes("#") || /\[[^\]]*\s[^\]]*\]/.test(pattern));
+}
+
+function usesUnicodePropertyEscape(pattern: string): boolean {
+  return /\\[pP]\{[^}]+\}/.test(pattern);
 }
 
 function replayRegexUnsupportedDiagnostic(
