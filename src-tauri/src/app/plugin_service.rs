@@ -1,6 +1,9 @@
 use crate::domain::plugins::{
-    permission_risk, validate_manifest, PluginDetail, PluginInstallSource, PluginManifest,
-    PluginPermissionRisk, PluginRuntime, PluginStatus,
+    permission_risk, validate_manifest, PluginCompatibilitySummary, PluginDetail,
+    PluginHookLifecycleSummary, PluginInstallPreview, PluginInstallSource, PluginLifecycleChange,
+    PluginLifecycleNotice, PluginManifest, PluginPermissionLifecycleChange,
+    PluginPermissionLifecycleSummary, PluginPermissionRisk, PluginRuntime,
+    PluginRuntimeLifecycleSummary, PluginStatus, PluginTrustSummary, PluginUpdateDiff,
 };
 use crate::infra::plugins::{package, repository, signing};
 use crate::shared::error::{AppError, AppResult};
@@ -169,6 +172,512 @@ pub(crate) struct RemotePackageInstallPolicy {
 #[derive(Debug, Clone, Copy)]
 struct PackageTrust {
     signature_verified: bool,
+}
+
+fn lifecycle_notice(
+    severity: &str,
+    code: &str,
+    message: impl Into<String>,
+) -> PluginLifecycleNotice {
+    PluginLifecycleNotice {
+        severity: severity.to_string(),
+        code: code.to_string(),
+        message: message.into(),
+    }
+}
+
+fn cleanup_staging_dir(staging_root: &Path, staging_dir: &Path) {
+    let _ = std::fs::remove_dir_all(staging_dir);
+    let _ = std::fs::remove_dir(staging_root);
+}
+
+fn app_error_message(error: &AppError) -> String {
+    let rendered = error.to_string();
+    rendered
+        .split_once(':')
+        .map_or(rendered.clone(), |(_, message)| message.trim().to_string())
+}
+
+fn compare_version_direction(from: &str, to: &str) -> String {
+    fn parse(version: &str) -> Option<(u64, u64, u64)> {
+        let core = version.split_once('-').map_or(version, |(core, _)| core);
+        let mut parts = core.split('.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next()?.parse().ok()?;
+        let patch = parts.next()?.parse().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some((major, minor, patch))
+    }
+
+    match (parse(from), parse(to)) {
+        (Some(left), Some(right)) if right > left => "upgrade".to_string(),
+        (Some(left), Some(right)) if right < left => "downgrade".to_string(),
+        (Some(_), Some(_)) => "same".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+fn runtime_lifecycle_summary(manifest: &PluginManifest) -> PluginRuntimeLifecycleSummary {
+    match &manifest.runtime {
+        PluginRuntime::DeclarativeRules { .. } => PluginRuntimeLifecycleSummary {
+            kind: "declarativeRules".to_string(),
+            label: "Declarative Rules".to_string(),
+            supported: true,
+            blocking_reasons: Vec::new(),
+        },
+        PluginRuntime::Native { engine } if manifest.id == OFFICIAL_PRIVACY_FILTER_ID => {
+            PluginRuntimeLifecycleSummary {
+                kind: "native".to_string(),
+                label: format!("Native ({engine})"),
+                supported: true,
+                blocking_reasons: Vec::new(),
+            }
+        }
+        PluginRuntime::Native { engine } => PluginRuntimeLifecycleSummary {
+            kind: "native".to_string(),
+            label: format!("Native ({engine})"),
+            supported: false,
+            blocking_reasons: vec![lifecycle_notice(
+                "error",
+                "PLUGIN_NATIVE_RUNTIME_UNSUPPORTED",
+                "third-party native plugin runtime is not supported",
+            )],
+        },
+        PluginRuntime::Wasm { .. } => PluginRuntimeLifecycleSummary {
+            kind: "wasm".to_string(),
+            label: "WASM".to_string(),
+            supported: false,
+            blocking_reasons: vec![lifecycle_notice(
+                "warn",
+                "PLUGIN_WASM_POLICY_GATED",
+                "WASM plugin execution is policy-gated in this release",
+            )],
+        },
+    }
+}
+
+fn hook_lifecycle_summaries(manifest: &PluginManifest) -> Vec<PluginHookLifecycleSummary> {
+    manifest
+        .hooks
+        .iter()
+        .map(|hook| PluginHookLifecycleSummary {
+            name: hook.name.clone(),
+            priority: hook.priority,
+            failure_policy: hook.failure_policy.clone(),
+        })
+        .collect()
+}
+
+fn permission_lifecycle_summaries(
+    permissions: &[String],
+    granted: &[String],
+    pending: &[String],
+) -> Vec<PluginPermissionLifecycleSummary> {
+    permissions
+        .iter()
+        .map(|permission| PluginPermissionLifecycleSummary {
+            permission: permission.clone(),
+            risk: permission_risk(permission).unwrap_or(PluginPermissionRisk::Low),
+            granted: granted.contains(permission),
+            pending: pending.contains(permission),
+        })
+        .collect()
+}
+
+fn compatibility_summary(
+    manifest: &PluginManifest,
+    host_version: &str,
+) -> PluginCompatibilitySummary {
+    match validate_manifest(manifest, host_version) {
+        Ok(()) => PluginCompatibilitySummary {
+            compatible: true,
+            host_version: host_version.to_string(),
+            app_range: manifest.host_compatibility.app.clone(),
+            plugin_api_range: manifest.host_compatibility.plugin_api.clone(),
+            platforms: manifest.host_compatibility.platforms.clone(),
+            blocking_reasons: Vec::new(),
+        },
+        Err(error) => PluginCompatibilitySummary {
+            compatible: false,
+            host_version: host_version.to_string(),
+            app_range: manifest.host_compatibility.app.clone(),
+            plugin_api_range: manifest.host_compatibility.plugin_api.clone(),
+            platforms: manifest.host_compatibility.platforms.clone(),
+            blocking_reasons: vec![lifecycle_notice("error", &error.code, error.message)],
+        },
+    }
+}
+
+fn trust_summary(
+    extracted: &package::ExtractedPluginPackage,
+    policy: &LocalPackageInstallPolicy,
+    trust: PackageTrust,
+) -> PluginTrustSummary {
+    let checksum_verified = policy.expected_checksum.as_deref().is_some_and(|expected| {
+        expected
+            .trim()
+            .eq_ignore_ascii_case(extracted.checksum.as_str())
+    });
+    PluginTrustSummary {
+        checksum: extracted.checksum.clone(),
+        expected_checksum: policy.expected_checksum.clone(),
+        checksum_verified,
+        signature_verified: trust.signature_verified,
+        unsigned: !trust.signature_verified,
+        developer_mode: policy.developer_mode,
+    }
+}
+
+pub(crate) fn preview_plugin_from_local_package_with_policy(
+    db: &crate::db::Db,
+    package_path: &Path,
+    cache_dir: &Path,
+    host_version: &str,
+    policy: LocalPackageInstallPolicy,
+) -> AppResult<PluginInstallPreview> {
+    std::fs::create_dir_all(cache_dir).map_err(|e| {
+        format!(
+            "failed to create plugin cache dir {}: {e}",
+            cache_dir.display()
+        )
+    })?;
+    let staging_root = cache_dir.join("staging");
+    let staging_dir = staging_root.join(format!(
+        "preview-{}",
+        crate::shared::time::now_unix_seconds()
+    ));
+    let extracted = match package::extract_plugin_package_for_inspection(
+        package_path,
+        &staging_dir,
+        package::PluginPackageLimits::default(),
+    ) {
+        Ok(extracted) => extracted,
+        Err(error) => {
+            cleanup_staging_dir(&staging_root, &staging_dir);
+            return Err(error);
+        }
+    };
+    let result = build_install_preview(
+        db,
+        &extracted,
+        host_version,
+        PluginInstallSource::Local,
+        &policy,
+    );
+    cleanup_staging_dir(&staging_root, &staging_dir);
+    result
+}
+
+fn build_install_preview(
+    db: &crate::db::Db,
+    extracted: &package::ExtractedPluginPackage,
+    host_version: &str,
+    source: PluginInstallSource,
+    policy: &LocalPackageInstallPolicy,
+) -> AppResult<PluginInstallPreview> {
+    let manifest = &extracted.manifest;
+    let compatibility = compatibility_summary(manifest, host_version);
+    let mut blocking_reasons = compatibility.blocking_reasons.clone();
+    let mut warnings = Vec::new();
+    let runtime = runtime_lifecycle_summary(manifest);
+    blocking_reasons.extend(
+        runtime
+            .blocking_reasons
+            .iter()
+            .filter(|notice| notice.severity == "error")
+            .cloned(),
+    );
+    warnings.extend(
+        runtime
+            .blocking_reasons
+            .iter()
+            .filter(|notice| notice.severity != "error")
+            .cloned(),
+    );
+
+    let trust = match verify_local_package(extracted, policy) {
+        Ok(trust) => trust,
+        Err(error) => {
+            blocking_reasons.push(lifecycle_notice(
+                "error",
+                error.code(),
+                app_error_message(&error),
+            ));
+            PackageTrust {
+                signature_verified: false,
+            }
+        }
+    };
+    if let Err(error) = enforce_unsigned_install_policy(manifest, policy, trust) {
+        blocking_reasons.push(lifecycle_notice(
+            "error",
+            error.code(),
+            app_error_message(&error),
+        ));
+    }
+    if let Err(error) = validate_reserved_official_source(manifest, source) {
+        blocking_reasons.push(lifecycle_notice(
+            "error",
+            error.code(),
+            app_error_message(&error),
+        ));
+    }
+
+    let existing = repository::get_plugin(db, &manifest.id).ok();
+    let existing_status = existing.as_ref().map(|detail| detail.summary.status);
+    let existing_version = existing
+        .as_ref()
+        .and_then(|detail| detail.summary.current_version.clone());
+
+    Ok(PluginInstallPreview {
+        plugin_id: manifest.id.clone(),
+        name: manifest.name.clone(),
+        version: manifest.version.clone(),
+        source,
+        description: manifest.description.clone(),
+        author: manifest.author.clone(),
+        homepage: manifest.homepage.clone(),
+        repository: manifest.repository.clone(),
+        license: manifest.license.clone(),
+        category: manifest.category.clone(),
+        runtime,
+        hooks: hook_lifecycle_summaries(manifest),
+        permissions: permission_lifecycle_summaries(
+            &manifest.permissions,
+            &[],
+            &manifest.permissions,
+        ),
+        compatibility,
+        trust: trust_summary(extracted, policy, trust),
+        existing_status,
+        existing_version,
+        blocking_reasons,
+        warnings,
+    })
+}
+
+pub(crate) fn preview_plugin_update_from_local_package(
+    db: &crate::db::Db,
+    package_path: &Path,
+    cache_dir: &Path,
+    host_version: &str,
+    policy: LocalPackageInstallPolicy,
+) -> AppResult<PluginUpdateDiff> {
+    std::fs::create_dir_all(cache_dir).map_err(|e| {
+        format!(
+            "failed to create plugin cache dir {}: {e}",
+            cache_dir.display()
+        )
+    })?;
+    let staging_root = cache_dir.join("staging");
+    let staging_dir = staging_root.join(format!(
+        "update-preview-{}",
+        crate::shared::time::now_unix_seconds()
+    ));
+    let extracted = match package::extract_plugin_package_for_inspection(
+        package_path,
+        &staging_dir,
+        package::PluginPackageLimits::default(),
+    ) {
+        Ok(extracted) => extracted,
+        Err(error) => {
+            cleanup_staging_dir(&staging_root, &staging_dir);
+            return Err(error);
+        }
+    };
+    let result = build_update_diff(db, &extracted, host_version, &policy);
+    cleanup_staging_dir(&staging_root, &staging_dir);
+    result
+}
+
+fn build_update_diff(
+    db: &crate::db::Db,
+    extracted: &package::ExtractedPluginPackage,
+    host_version: &str,
+    policy: &LocalPackageInstallPolicy,
+) -> AppResult<PluginUpdateDiff> {
+    let manifest = &extracted.manifest;
+    let current = repository::get_plugin(db, &manifest.id)?;
+    let compatibility = compatibility_summary(manifest, host_version);
+    let mut blocking_reasons = compatibility.blocking_reasons.clone();
+    let mut warnings = Vec::new();
+
+    let trust = match verify_local_package(extracted, policy) {
+        Ok(trust) => trust,
+        Err(error) => {
+            blocking_reasons.push(lifecycle_notice(
+                "error",
+                error.code(),
+                app_error_message(&error),
+            ));
+            PackageTrust {
+                signature_verified: false,
+            }
+        }
+    };
+    if let Err(error) = enforce_unsigned_install_policy(manifest, policy, trust) {
+        blocking_reasons.push(lifecycle_notice(
+            "error",
+            error.code(),
+            app_error_message(&error),
+        ));
+    }
+    if let Err(error) = validate_reserved_official_source(manifest, PluginInstallSource::Local) {
+        blocking_reasons.push(lifecycle_notice(
+            "error",
+            error.code(),
+            app_error_message(&error),
+        ));
+    }
+
+    let current_runtime = runtime_lifecycle_summary(&current.manifest);
+    let next_runtime = runtime_lifecycle_summary(manifest);
+    blocking_reasons.extend(
+        next_runtime
+            .blocking_reasons
+            .iter()
+            .filter(|notice| notice.severity == "error")
+            .cloned(),
+    );
+    warnings.extend(
+        next_runtime
+            .blocking_reasons
+            .iter()
+            .filter(|notice| notice.severity != "error")
+            .cloned(),
+    );
+    let runtime_change = (current_runtime.kind != next_runtime.kind
+        || current_runtime.label != next_runtime.label
+        || current_runtime.supported != next_runtime.supported)
+        .then(|| PluginLifecycleChange {
+            name: "runtime".to_string(),
+            change: "changed".to_string(),
+            before: Some(current_runtime.label),
+            after: Some(next_runtime.label),
+        });
+
+    let from_version = current
+        .summary
+        .current_version
+        .clone()
+        .unwrap_or_else(|| current.manifest.version.clone());
+    let version_direction = compare_version_direction(&from_version, &manifest.version);
+    if version_direction == "downgrade" {
+        warnings.push(lifecycle_notice(
+            "warn",
+            "PLUGIN_UPDATE_DOWNGRADE",
+            "selected package version is lower than the installed version",
+        ));
+    }
+
+    Ok(PluginUpdateDiff {
+        plugin_id: manifest.id.clone(),
+        from_version: from_version.clone(),
+        to_version: manifest.version.clone(),
+        version_direction,
+        runtime_change,
+        hook_changes: diff_hooks(&current.manifest, manifest),
+        permission_changes: diff_permissions(&current, manifest),
+        config_version_change: config_version_change(&current.manifest, manifest),
+        compatibility,
+        trust: trust_summary(extracted, policy, trust),
+        rollback_available: repository::get_plugin_version(db, &manifest.id, &from_version).is_ok(),
+        blocking_reasons,
+        warnings,
+    })
+}
+
+fn diff_hooks(before: &PluginManifest, after: &PluginManifest) -> Vec<PluginLifecycleChange> {
+    let mut changes = Vec::new();
+    for hook in &before.hooks {
+        match after.hooks.iter().find(|next| next.name == hook.name) {
+            Some(next)
+                if next.priority != hook.priority || next.failure_policy != hook.failure_policy =>
+            {
+                changes.push(PluginLifecycleChange {
+                    name: hook.name.clone(),
+                    change: "changed".to_string(),
+                    before: Some(format!(
+                        "priority={}, failurePolicy={}",
+                        hook.priority,
+                        hook.failure_policy.as_deref().unwrap_or("-")
+                    )),
+                    after: Some(format!(
+                        "priority={}, failurePolicy={}",
+                        next.priority,
+                        next.failure_policy.as_deref().unwrap_or("-")
+                    )),
+                });
+            }
+            Some(_) => {}
+            None => changes.push(PluginLifecycleChange {
+                name: hook.name.clone(),
+                change: "removed".to_string(),
+                before: Some("declared".to_string()),
+                after: None,
+            }),
+        }
+    }
+    for hook in &after.hooks {
+        if before.hooks.iter().all(|prev| prev.name != hook.name) {
+            changes.push(PluginLifecycleChange {
+                name: hook.name.clone(),
+                change: "added".to_string(),
+                before: None,
+                after: Some(format!(
+                    "priority={}, failurePolicy={}",
+                    hook.priority,
+                    hook.failure_policy.as_deref().unwrap_or("-")
+                )),
+            });
+        }
+    }
+    changes
+}
+
+fn diff_permissions(
+    current: &PluginDetail,
+    next: &PluginManifest,
+) -> Vec<PluginPermissionLifecycleChange> {
+    let mut all = current.manifest.permissions.clone();
+    for permission in &next.permissions {
+        if !all.contains(permission) {
+            all.push(permission.clone());
+        }
+    }
+    all.sort();
+
+    all.into_iter()
+        .map(|permission| {
+            let was_requested = current.manifest.permissions.contains(&permission);
+            let is_requested = next.permissions.contains(&permission);
+            let was_granted = current.granted_permissions.contains(&permission);
+            let was_pending = current.pending_permissions.contains(&permission);
+            let change = match (was_requested, is_requested, was_granted, was_pending) {
+                (true, true, true, _) => "unchanged_granted",
+                (true, true, false, true) => "unchanged_pending",
+                (true, true, false, false) => "unchanged_requested",
+                (false, true, _, _) => "added_pending",
+                (true, false, _, _) => "removed",
+                (false, false, _, _) => "not_requested",
+            };
+            let risk = permission_risk(&permission).unwrap_or(PluginPermissionRisk::Low);
+            PluginPermissionLifecycleChange {
+                permission,
+                risk,
+                change: change.to_string(),
+            }
+        })
+        .filter(|change| change.change != "not_requested")
+        .collect()
+}
+
+fn config_version_change(before: &PluginManifest, after: &PluginManifest) -> Option<String> {
+    let before_version = before.config_version.unwrap_or(1);
+    let after_version = after.config_version.unwrap_or(1);
+    (before_version != after_version).then(|| format!("{before_version} -> {after_version}"))
 }
 
 pub(crate) fn install_plugin_from_local_package_with_policy(
@@ -1156,7 +1665,9 @@ fn validate_enum(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::plugins::{PluginInstallSource, PluginManifest, PluginStatus};
+    use crate::domain::plugins::{
+        PluginInstallSource, PluginManifest, PluginPermissionRisk, PluginStatus,
+    };
     use crate::gateway::plugins::context::{GatewayPluginHookName, GatewayRequestHookInput};
     use crate::gateway::plugins::pipeline::{GatewayPluginPipeline, GatewayPluginPipelineConfig};
     use std::io::Write;
@@ -1972,6 +2483,153 @@ DROP TABLE plugins;
 
     fn invalid_checksum() -> String {
         "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string()
+    }
+
+    #[test]
+    fn plugin_local_install_preview_reports_identity_risk_and_trust_without_db_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
+        let package_path = dir.path().join("preview-safe.aio-plugin");
+        write_local_package(
+            &package_path,
+            local_package_manifest("local.preview-safe", "1.0.0"),
+        );
+
+        let preview = preview_plugin_from_local_package_with_policy(
+            &db,
+            &package_path,
+            &dir.path().join("plugins/cache"),
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy {
+                allow_unsigned: true,
+                developer_mode: true,
+                ..LocalPackageInstallPolicy::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(preview.plugin_id, "local.preview-safe");
+        assert_eq!(preview.name, "Local Package Plugin");
+        assert_eq!(preview.version, "1.0.0");
+        assert_eq!(preview.source, PluginInstallSource::Local);
+        assert_eq!(preview.runtime.kind, "declarativeRules");
+        assert!(preview.runtime.supported);
+        assert!(preview.compatibility.compatible);
+        assert!(preview.trust.unsigned);
+        assert!(!preview.trust.signature_verified);
+        assert_eq!(preview.permissions[0].permission, "request.meta.read");
+        assert_eq!(preview.permissions[0].risk, PluginPermissionRisk::Low);
+        assert!(preview.blocking_reasons.is_empty());
+        assert!(repository::get_plugin(&db, "local.preview-safe").is_err());
+    }
+
+    #[test]
+    fn plugin_local_install_preview_reports_incompatible_manifest_without_installing() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
+        let package_path = dir.path().join("preview-incompatible.aio-plugin");
+        let mut manifest = local_package_manifest("local.preview-incompatible", "1.0.0");
+        manifest["hostCompatibility"] = serde_json::json!({
+            "app": ">=999.0.0 <1000.0.0",
+            "pluginApi": "^1.0.0",
+            "platforms": ["macos", "windows", "linux"]
+        });
+        write_local_package(&package_path, manifest);
+
+        let preview = preview_plugin_from_local_package_with_policy(
+            &db,
+            &package_path,
+            &dir.path().join("plugins/cache"),
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy {
+                allow_unsigned: true,
+                developer_mode: true,
+                ..LocalPackageInstallPolicy::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(preview.plugin_id, "local.preview-incompatible");
+        assert!(!preview.compatibility.compatible);
+        assert!(preview
+            .blocking_reasons
+            .iter()
+            .any(|notice| notice.code == "PLUGIN_INCOMPATIBLE_HOST"));
+        assert!(repository::get_plugin(&db, "local.preview-incompatible").is_err());
+    }
+
+    #[test]
+    fn plugin_local_update_preview_reports_permission_runtime_hook_and_config_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
+        let cache_dir = dir.path().join("plugins/cache");
+        let installed_dir = dir.path().join("plugins/installed");
+        let v1_package = dir.path().join("diff-v1.aio-plugin");
+        write_local_package(&v1_package, local_package_manifest("local.diff", "1.0.0"));
+        install_plugin_from_local_package_with_policy(
+            &db,
+            &v1_package,
+            &cache_dir,
+            &installed_dir,
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy {
+                allow_unsigned: true,
+                developer_mode: true,
+                ..LocalPackageInstallPolicy::default()
+            },
+        )
+        .unwrap();
+        grant_plugin_permissions(&db, "local.diff", vec!["request.meta.read".to_string()]).unwrap();
+
+        let v2_package = dir.path().join("diff-v2.aio-plugin");
+        let mut v2_manifest = local_package_manifest("local.diff", "1.1.0");
+        v2_manifest["configVersion"] = serde_json::json!(2);
+        v2_manifest["hooks"] = serde_json::json!([
+            {
+                "name": "gateway.request.afterBodyRead",
+                "priority": 10,
+                "failurePolicy": "fail-open"
+            },
+            {
+                "name": "gateway.request.beforeSend",
+                "priority": 20,
+                "failurePolicy": "fail-open"
+            }
+        ]);
+        v2_manifest["permissions"] =
+            serde_json::json!(["request.meta.read", "request.header.read"]);
+        write_local_package(&v2_package, v2_manifest);
+
+        let diff = preview_plugin_update_from_local_package(
+            &db,
+            &v2_package,
+            &cache_dir,
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy {
+                allow_unsigned: true,
+                developer_mode: true,
+                ..LocalPackageInstallPolicy::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(diff.plugin_id, "local.diff");
+        assert_eq!(diff.from_version, "1.0.0");
+        assert_eq!(diff.to_version, "1.1.0");
+        assert_eq!(diff.version_direction, "upgrade");
+        assert_eq!(diff.config_version_change.as_deref(), Some("1 -> 2"));
+        assert!(diff.rollback_available);
+        assert!(diff
+            .hook_changes
+            .iter()
+            .any(|change| change.name == "gateway.request.beforeSend" && change.change == "added"));
+        assert!(diff.permission_changes.iter().any(|change| {
+            change.permission == "request.meta.read" && change.change == "unchanged_granted"
+        }));
+        assert!(diff.permission_changes.iter().any(|change| {
+            change.permission == "request.header.read" && change.change == "added_pending"
+        }));
+        assert!(diff.blocking_reasons.is_empty());
     }
 
     fn signed_package_policy(

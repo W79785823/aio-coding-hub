@@ -36,6 +36,23 @@ pub(crate) fn extract_plugin_package(
     staging_dir: &Path,
     limits: PluginPackageLimits,
 ) -> AppResult<ExtractedPluginPackage> {
+    extract_plugin_package_with_mode(package_path, staging_dir, limits, true)
+}
+
+pub(crate) fn extract_plugin_package_for_inspection(
+    package_path: &Path,
+    staging_dir: &Path,
+    limits: PluginPackageLimits,
+) -> AppResult<ExtractedPluginPackage> {
+    extract_plugin_package_with_mode(package_path, staging_dir, limits, false)
+}
+
+fn extract_plugin_package_with_mode(
+    package_path: &Path,
+    staging_dir: &Path,
+    limits: PluginPackageLimits,
+    validate_manifest_for_host: bool,
+) -> AppResult<ExtractedPluginPackage> {
     let metadata = std::fs::metadata(package_path).map_err(|error| {
         AppError::new(
             "PLUGIN_PACKAGE_NOT_FOUND",
@@ -92,7 +109,13 @@ pub(crate) fn extract_plugin_package(
     })?;
 
     let checksum = format!("sha256:{:x}", Sha256::digest(&bytes));
-    match extract_zip_bytes(bytes, staging_dir, &limits, checksum) {
+    match extract_zip_bytes(
+        bytes,
+        staging_dir,
+        &limits,
+        checksum,
+        validate_manifest_for_host,
+    ) {
         Ok(extracted) => Ok(extracted),
         Err(error) => {
             let _ = std::fs::remove_dir_all(staging_dir);
@@ -106,6 +129,7 @@ fn extract_zip_bytes(
     staging_dir: &Path,
     limits: &PluginPackageLimits,
     checksum: String,
+    validate_manifest_for_host: bool,
 ) -> AppResult<ExtractedPluginPackage> {
     let mut archive =
         zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).map_err(|error| {
@@ -229,7 +253,9 @@ fn extract_zip_bytes(
             format!("failed to parse plugin package manifest: {error}"),
         )
     })?;
-    crate::domain::plugins::validate_manifest(&manifest, env!("CARGO_PKG_VERSION"))?;
+    if validate_manifest_for_host {
+        crate::domain::plugins::validate_manifest(&manifest, env!("CARGO_PKG_VERSION"))?;
+    }
 
     Ok(ExtractedPluginPackage {
         root_dir,

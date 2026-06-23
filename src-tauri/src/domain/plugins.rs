@@ -229,6 +229,121 @@ pub struct PluginRuntimeFailure {
     pub created_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginLifecycleNotice {
+    pub severity: String,
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginRuntimeLifecycleSummary {
+    pub kind: String,
+    pub label: String,
+    pub supported: bool,
+    pub blocking_reasons: Vec<PluginLifecycleNotice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginHookLifecycleSummary {
+    pub name: String,
+    pub priority: i32,
+    pub failure_policy: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginPermissionLifecycleSummary {
+    pub permission: String,
+    pub risk: PluginPermissionRisk,
+    pub granted: bool,
+    pub pending: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCompatibilitySummary {
+    pub compatible: bool,
+    pub host_version: String,
+    pub app_range: String,
+    pub plugin_api_range: String,
+    pub platforms: Vec<String>,
+    pub blocking_reasons: Vec<PluginLifecycleNotice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginTrustSummary {
+    pub checksum: String,
+    pub expected_checksum: Option<String>,
+    pub checksum_verified: bool,
+    pub signature_verified: bool,
+    pub unsigned: bool,
+    pub developer_mode: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInstallPreview {
+    pub plugin_id: String,
+    pub name: String,
+    pub version: String,
+    pub source: PluginInstallSource,
+    pub description: Option<String>,
+    pub author: Option<serde_json::Value>,
+    pub homepage: Option<String>,
+    pub repository: Option<serde_json::Value>,
+    pub license: Option<String>,
+    pub category: Option<String>,
+    pub runtime: PluginRuntimeLifecycleSummary,
+    pub hooks: Vec<PluginHookLifecycleSummary>,
+    pub permissions: Vec<PluginPermissionLifecycleSummary>,
+    pub compatibility: PluginCompatibilitySummary,
+    pub trust: PluginTrustSummary,
+    pub existing_status: Option<PluginStatus>,
+    pub existing_version: Option<String>,
+    pub blocking_reasons: Vec<PluginLifecycleNotice>,
+    pub warnings: Vec<PluginLifecycleNotice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginLifecycleChange {
+    pub name: String,
+    pub change: String,
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginPermissionLifecycleChange {
+    pub permission: String,
+    pub risk: PluginPermissionRisk,
+    pub change: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginUpdateDiff {
+    pub plugin_id: String,
+    pub from_version: String,
+    pub to_version: String,
+    pub version_direction: String,
+    pub runtime_change: Option<PluginLifecycleChange>,
+    pub hook_changes: Vec<PluginLifecycleChange>,
+    pub permission_changes: Vec<PluginPermissionLifecycleChange>,
+    pub config_version_change: Option<String>,
+    pub compatibility: PluginCompatibilitySummary,
+    pub trust: PluginTrustSummary,
+    pub rollback_available: bool,
+    pub blocking_reasons: Vec<PluginLifecycleNotice>,
+    pub warnings: Vec<PluginLifecycleNotice>,
+}
+
 impl From<PluginValidationError> for crate::shared::error::AppError {
     fn from(value: PluginValidationError) -> Self {
         crate::shared::error::AppError::new(value.code, value.message)
