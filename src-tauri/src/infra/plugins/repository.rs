@@ -147,6 +147,8 @@ WHERE plugin_id = ?1
         load_plugin_permissions(conn, plugin_id)?.unwrap_or((row.granted_permissions, Vec::new()));
     let audit_logs = list_audit_logs_with_conn(conn, Some(plugin_id), 50)?;
     let runtime_failures = list_runtime_failures_with_conn(conn, plugin_id, 50)?;
+    let rollback_versions =
+        list_rollback_versions_with_conn(conn, plugin_id, row.summary.current_version.as_deref())?;
 
     Ok(PluginDetail {
         summary: row.summary,
@@ -158,7 +160,52 @@ WHERE plugin_id = ?1
         pending_permissions,
         audit_logs,
         runtime_failures,
+        rollback_versions,
     })
+}
+
+fn list_rollback_versions_with_conn(
+    conn: &rusqlite::Connection,
+    plugin_id: &str,
+    current_version: Option<&str>,
+) -> AppResult<Vec<String>> {
+    let mut stmt = conn
+        .prepare_cached(
+            r#"
+SELECT version, installed_dir
+FROM plugin_versions
+WHERE plugin_id = ?1
+ORDER BY created_at DESC, version DESC
+"#,
+        )
+        .map_err(|e| db_err!("failed to prepare plugin rollback versions query: {e}"))?;
+
+    let rows = stmt
+        .query_map(params![plugin_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .map_err(|e| db_err!("failed to query plugin rollback versions: {e}"))?;
+
+    let mut versions = Vec::new();
+    for row in rows {
+        let (version, installed_dir) =
+            row.map_err(|e| db_err!("failed to read plugin rollback version row: {e}"))?;
+        if Some(version.as_str()) == current_version {
+            continue;
+        }
+        if installed_dir
+            .as_deref()
+            .is_some_and(plugin_installed_dir_available)
+        {
+            versions.push(version);
+        }
+    }
+    Ok(versions)
+}
+
+pub(crate) fn plugin_installed_dir_available(installed_dir: &str) -> bool {
+    let root = std::path::Path::new(installed_dir);
+    root.is_dir() && root.join("plugin.json").is_file()
 }
 
 pub(crate) fn insert_plugin(db: &db::Db, input: InsertPluginInput) -> AppResult<PluginDetail> {

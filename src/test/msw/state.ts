@@ -412,6 +412,7 @@ function officialPrivacyFilterDetail(): PluginDetail {
       },
     ],
     runtime_failures: [],
+    rollback_versions: [],
   };
 }
 

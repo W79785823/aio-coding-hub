@@ -204,6 +204,7 @@ pub struct PluginDetail {
     pub pending_permissions: Vec<String>,
     pub audit_logs: Vec<PluginAuditLog>,
     pub runtime_failures: Vec<PluginRuntimeFailure>,
+    pub rollback_versions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]

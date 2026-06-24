@@ -90,6 +90,7 @@ function detail(overrides: Partial<PluginDetail> = {}): PluginDetail {
     pending_permissions: [],
     audit_logs: [],
     runtime_failures: [],
+    rollback_versions: [],
     ...overrides,
   };
 }

@@ -81,6 +81,7 @@ function pluginDetail(install_source: PluginDetail["install_source"] = "local"):
     pending_permissions: [],
     audit_logs: [],
     runtime_failures: [],
+    rollback_versions: [],
   };
 }
 

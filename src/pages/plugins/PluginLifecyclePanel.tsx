@@ -44,8 +44,30 @@ function auditString(detail: PluginDetail, keys: readonly string[]) {
   return null;
 }
 
-function isUnsigned(detail: PluginDetail) {
-  return detail.audit_logs.some((log) => jsonRecord(log.details)?.unsigned === true);
+const TRUST_EVENT_TYPES = new Set([
+  "plugin.installed",
+  "plugin.updated",
+  "plugin.rollback",
+  "plugin.official.installed",
+]);
+
+function latestTrustAudit(detail: PluginDetail) {
+  return detail.audit_logs
+    .filter((log) => TRUST_EVENT_TYPES.has(log.event_type))
+    .sort((a, b) => b.created_at - a.created_at || b.id - a.id)[0];
+}
+
+function trustLabel(detail: PluginDetail) {
+  const latest = latestTrustAudit(detail);
+  const details = jsonRecord(latest?.details);
+  if (details?.unsigned === true) return "未签名";
+  if (details?.signatureVerified === true || details?.signature_verified === true) {
+    return "签名已验证";
+  }
+  if (latest?.event_type === "plugin.official.installed" || detail.install_source === "official") {
+    return "官方来源";
+  }
+  return "签名状态未记录";
 }
 
 function quarantineReason(detail: PluginDetail) {
@@ -63,11 +85,11 @@ export function PluginLifecyclePanel({
   onRollback,
 }: PluginLifecyclePanelProps) {
   const checksum = auditString(detail, ["packageChecksum", "checksum"]);
-  const unsigned = isUnsigned(detail);
   const sourceLabel = INSTALL_SOURCE_LABELS[detail.install_source] ?? detail.install_source;
   const reason = quarantineReason(detail);
   const currentVersion = detail.summary.current_version ?? detail.manifest.version ?? "-";
   const updateState = detail.summary.update_available ? "有可用更新" : "无可用更新";
+  const trust = trustLabel(detail);
 
   return (
     <section className="space-y-3">
@@ -109,7 +131,7 @@ export function PluginLifecyclePanel({
         </div>
         <div className="rounded-md border border-border px-3 py-2">
           <div className="text-xs text-muted-foreground">信任</div>
-          <div className="mt-1 text-foreground">{unsigned ? "未签名" : "签名已验证"}</div>
+          <div className="mt-1 text-foreground">{trust}</div>
         </div>
         <div className="rounded-md border border-border px-3 py-2">
           <div className="text-xs text-muted-foreground">回滚</div>

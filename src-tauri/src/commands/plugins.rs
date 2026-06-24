@@ -125,11 +125,7 @@ fn official_resource_root_exists(root: &std::path::Path) -> bool {
 }
 
 fn local_plugin_preview_policy() -> plugin_service::LocalPackageInstallPolicy {
-    plugin_service::LocalPackageInstallPolicy {
-        allow_unsigned: true,
-        developer_mode: true,
-        ..Default::default()
-    }
+    plugin_service::LocalPackageInstallPolicy::default()
 }
 
 #[tauri::command]
@@ -740,5 +736,17 @@ INSERT INTO plugin_market_sources(
         let public_key = market_index_trusted_public_key(&db, &input).unwrap();
 
         assert_eq!(public_key.as_deref(), Some("trusted-key"));
+    }
+
+    #[test]
+    fn local_preview_policy_matches_local_install_policy() {
+        let policy = local_plugin_preview_policy();
+
+        assert!(!policy.allow_unsigned);
+        assert!(!policy.developer_mode);
+        assert!(policy.expected_plugin_id.is_none());
+        assert!(policy.expected_checksum.is_none());
+        assert!(policy.signature.is_none());
+        assert!(policy.public_key.is_none());
     }
 }

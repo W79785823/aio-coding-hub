@@ -29,9 +29,13 @@ const LIFECYCLE_NOTICE_CODES = new Set([
 function changeLabel(change: string) {
   const labels: Record<string, string> = {
     added: "新增",
+    added_pending: "新增，待授权",
     removed: "移除",
     changed: "变更",
     unchanged: "未变",
+    unchanged_granted: "已授权",
+    unchanged_pending: "待授权",
+    unchanged_requested: "仍需授权",
   };
   return labels[change] ?? change;
 }

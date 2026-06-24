@@ -98,17 +98,25 @@ function detailValue(details: JsonValue, key: string) {
   return trimmed ? trimmed : null;
 }
 
+const TRUST_EVENT_TYPES = new Set([
+  "plugin.installed",
+  "plugin.updated",
+  "plugin.rollback",
+  "plugin.official.installed",
+]);
+
+function latestTrustAudit(detail: PluginDetail) {
+  return detail.audit_logs
+    .filter((log) => TRUST_EVENT_TYPES.has(log.event_type))
+    .sort((a, b) => b.created_at - a.created_at || b.id - a.id)[0];
+}
+
 function isUnsigned(detail: PluginDetail) {
-  return detail.audit_logs.some((log) => jsonRecord(log.details)?.unsigned === true);
+  return jsonRecord(latestTrustAudit(detail)?.details)?.unsigned === true;
 }
 
 function previousVersion(detail: PluginDetail) {
-  const current = detail.summary.current_version ?? detail.manifest.version;
-  const fromAudit = detail.audit_logs
-    .map((log) => jsonRecord(log.details)?.fromVersion ?? null)
-    .find((value): value is string => typeof value === "string" && value !== current);
-  if (fromAudit) return fromAudit;
-  return current === "1.0.0" ? null : "1.0.0";
+  return detail.rollback_versions[0] ?? null;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

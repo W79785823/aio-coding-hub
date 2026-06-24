@@ -127,6 +127,7 @@ function detail(overrides: Partial<PluginDetail> = {}): PluginDetail {
       },
     ],
     runtime_failures: [],
+    rollback_versions: [],
     ...overrides,
   };
 }
@@ -194,7 +195,7 @@ function updateDiff(overrides: Partial<PluginUpdateDiff> = {}): PluginUpdateDiff
       {
         permission: "request.body.write",
         risk: "critical",
-        change: "added",
+        change: "added_pending",
       },
     ],
     configVersionChange: "1 -> 2",
@@ -301,6 +302,87 @@ describe("pages/PluginsPage", () => {
     expect(screen.getByText("设置")).toBeInTheDocument();
     expect(screen.getByText("开发者信息")).toBeInTheDocument();
     expect(screen.getByText("读取你发送给模型的内容")).toBeInTheDocument();
+  });
+
+  it("does not present unknown audit trust as verified", () => {
+    vi.mocked(usePluginsListQuery).mockReturnValue({
+      data: [summary()],
+      isLoading: false,
+      isFetching: false,
+      error: null,
+    } as any);
+    vi.mocked(usePluginQuery).mockReturnValue({
+      data: detail({
+        audit_logs: [
+          {
+            id: 12,
+            plugin_id: "community.prompt-helper",
+            trace_id: null,
+            event_type: "plugin.installed",
+            risk_level: "low",
+            message: "Plugin installed before trust audit fields",
+            details: {},
+            created_at: 42,
+          },
+        ],
+      }),
+      isLoading: false,
+      isFetching: false,
+      error: null,
+    } as any);
+
+    renderWithProviders(<PluginsPage />);
+
+    const lifecyclePanel = screen.getByText("生命周期").closest("section");
+    expect(lifecyclePanel).not.toBeNull();
+    expect(within(lifecyclePanel as HTMLElement).getByText("签名状态未记录")).toBeInTheDocument();
+    expect(screen.queryByText("签名已验证")).not.toBeInTheDocument();
+  });
+
+  it("uses only the latest lifecycle audit for trust state", () => {
+    vi.mocked(usePluginsListQuery).mockReturnValue({
+      data: [summary()],
+      isLoading: false,
+      isFetching: false,
+      error: null,
+    } as any);
+    vi.mocked(usePluginQuery).mockReturnValue({
+      data: detail({
+        audit_logs: [
+          {
+            id: 13,
+            plugin_id: "community.prompt-helper",
+            trace_id: null,
+            event_type: "plugin.rollback",
+            risk_level: "high",
+            message: "Plugin rolled back",
+            details: { version: "1.0.0" },
+            created_at: 50,
+          },
+          {
+            id: 12,
+            plugin_id: "community.prompt-helper",
+            trace_id: null,
+            event_type: "plugin.updated",
+            risk_level: "low",
+            message: "Plugin updated from signed package",
+            details: { signatureVerified: true, unsigned: false },
+            created_at: 40,
+          },
+        ],
+      }),
+      isLoading: false,
+      isFetching: false,
+      error: null,
+    } as any);
+
+    renderWithProviders(<PluginsPage />);
+
+    const lifecyclePanel = screen.getByText("生命周期").closest("section");
+    expect(lifecyclePanel).not.toBeNull();
+    expect(within(lifecyclePanel as HTMLElement).getByText("签名状态未记录")).toBeInTheDocument();
+    expect(screen.queryByText("签名已验证")).not.toBeInTheDocument();
+    expect(screen.queryByText("未签名")).not.toBeInTheDocument();
   });
 
   it("renders runtime failures in the runtime observability section", async () => {
@@ -475,6 +557,7 @@ describe("pages/PluginsPage", () => {
             },
           },
         },
+        install_source: "official",
         config: { sensitiveTypes: ["email", "cn_phone"] },
         granted_permissions: ["request.body.read", "request.body.write", "log.redact"],
       }),
@@ -486,6 +569,7 @@ describe("pages/PluginsPage", () => {
     renderWithProviders(<PluginsPage />);
 
     expect(screen.getByText("检测策略")).toBeInTheDocument();
+    expect(screen.getByText("官方来源")).toBeInTheDocument();
     expect(screen.getAllByText(/200\+ Gitleaks/).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByLabelText("邮箱地址")).toBeChecked();
     expect(screen.queryByLabelText("sensitiveTypes")).not.toBeInTheDocument();
@@ -596,6 +680,44 @@ describe("pages/PluginsPage", () => {
     });
   });
 
+  it("blocks install confirmation for destructive preview reasons", async () => {
+    const previewMutation = mutation({
+      mutateAsync: vi.fn().mockResolvedValue(
+        installPreview({
+          blockingReasons: [
+            {
+              severity: "error",
+              code: "PLUGIN_UNSIGNED_HIGH_RISK_PERMISSION",
+              message: "Unsigned plugin cannot request high-risk permission",
+            },
+          ],
+        })
+      ),
+    });
+    const importMutation = mutation();
+    vi.mocked(usePluginPreviewFromFileMutation).mockReturnValue(previewMutation as any);
+    vi.mocked(usePluginInstallFromFileMutation).mockReturnValue(importMutation as any);
+    vi.mocked(usePluginsListQuery).mockReturnValue({
+      data: [summary()],
+      isLoading: false,
+      isFetching: false,
+      error: null,
+    } as any);
+    vi.mocked(openDesktopSinglePath).mockResolvedValue("/tmp/risky-plugin.aio-plugin");
+
+    renderWithProviders(<PluginsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "导入 .aio-plugin" }));
+
+    const previewDialog = await screen.findByRole("dialog", { name: "安装前预检" });
+    const reason = within(previewDialog).getByText(
+      "Unsigned plugin cannot request high-risk permission"
+    );
+    expect(within(previewDialog).getByText("阻断项")).toBeInTheDocument();
+    expect(reason.closest(".text-destructive")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认安装" })).toBeDisabled();
+    expect(importMutation.mutateAsync).not.toHaveBeenCalled();
+  });
+
   it("approves pending plugin permissions from the detail panel", async () => {
     const grantMutation = mutation();
     vi.mocked(usePluginGrantPermissionsMutation).mockReturnValue(grantMutation as any);
@@ -642,6 +764,51 @@ describe("pages/PluginsPage", () => {
       );
     });
     expect(screen.getByRole("button", { name: "授权待审批权限" })).toBeInTheDocument();
+  });
+
+  it("does not infer rollback targets from audit details", () => {
+    vi.mocked(usePluginsListQuery).mockReturnValue({
+      data: [
+        summary({
+          plugin_id: "community.redactor",
+          name: "Community Redactor",
+          current_version: "1.1.0",
+        }),
+      ],
+      isLoading: false,
+      isFetching: false,
+      error: null,
+    } as any);
+    vi.mocked(usePluginQuery).mockReturnValue({
+      data: detail({
+        summary: summary({
+          plugin_id: "community.redactor",
+          name: "Community Redactor",
+          current_version: "1.1.0",
+        }),
+        audit_logs: [
+          {
+            id: 2,
+            plugin_id: "community.redactor",
+            trace_id: null,
+            event_type: "plugin.updated",
+            risk_level: "medium",
+            message: "Plugin updated",
+            details: { fromVersion: "1.0.0" },
+            created_at: 40,
+          },
+        ],
+        rollback_versions: [],
+      }),
+      isLoading: false,
+      isFetching: false,
+      error: null,
+    } as any);
+
+    renderWithProviders(<PluginsPage />);
+
+    expect(screen.queryByRole("button", { name: "回滚 1.0.0" })).not.toBeInTheDocument();
+    expect(screen.getByText("暂无可回滚版本")).toBeInTheDocument();
   });
 
   it("shows package risk labels and wires update/rollback actions", async () => {
@@ -697,6 +864,7 @@ describe("pages/PluginsPage", () => {
             created_at: 40,
           },
         ],
+        rollback_versions: ["1.0.0"],
       }),
       isLoading: false,
       isFetching: false,
@@ -776,6 +944,7 @@ describe("pages/PluginsPage", () => {
     const updateDialog = await screen.findByRole("dialog", { name: "更新预检" });
     expect(within(updateDialog).getByText("1.0.0 -> 1.1.0")).toBeInTheDocument();
     expect(within(updateDialog).getByText("gateway.response.beforeSend")).toBeInTheDocument();
+    expect(within(updateDialog).getByText("新增，待授权")).toBeInTheDocument();
     expect(within(updateDialog).getByText("隔离与撤销")).toBeInTheDocument();
     expect(within(updateDialog).getByText("Plugin revoked by market index")).toBeInTheDocument();
     expect(updateMutation.mutateAsync).not.toHaveBeenCalled();

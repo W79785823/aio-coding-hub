@@ -692,7 +692,7 @@ fn build_update_diff(
 
 fn rollback_available(db: &crate::db::Db, plugin_id: &str, version: &str) -> bool {
     rollback_candidate_installed_dir(db, plugin_id, version)
-        .is_some_and(|installed_dir| Path::new(&installed_dir).is_dir())
+        .is_some_and(|installed_dir| repository::plugin_installed_dir_available(&installed_dir))
 }
 
 fn rollback_candidate_installed_dir(
@@ -896,6 +896,7 @@ pub(crate) fn install_plugin_from_local_package_with_policy(
                 "packageChecksum": extracted.checksum,
                 "cachedPackage": cache_package_path.to_string_lossy(),
                 "unsigned": !trust.signature_verified,
+                "signatureVerified": trust.signature_verified,
                 "developerMode": policy.developer_mode,
             }),
         )?;
@@ -1131,6 +1132,7 @@ pub(crate) fn update_plugin_from_local_package(
                 "toVersion": extracted.manifest.version,
                 "pendingPermissions": pending,
                 "unsigned": !trust.signature_verified,
+                "signatureVerified": trust.signature_verified,
                 "developerMode": policy.developer_mode,
             }),
         )?;
@@ -1156,6 +1158,18 @@ pub(crate) fn rollback_plugin_to_version(
     version: &str,
 ) -> AppResult<PluginDetail> {
     let (manifest, installed_dir) = repository::get_plugin_version(db, plugin_id, version)?;
+    let installed_dir_value = installed_dir.as_deref().ok_or_else(|| {
+        AppError::new(
+            "PLUGIN_ROLLBACK_UNAVAILABLE",
+            format!("plugin version {version} has no install directory"),
+        )
+    })?;
+    if !repository::plugin_installed_dir_available(installed_dir_value) {
+        return Err(AppError::new(
+            "PLUGIN_ROLLBACK_UNAVAILABLE",
+            format!("plugin version {version} install directory is unavailable"),
+        ));
+    }
     let detail = repository::update_plugin_manifest(db, manifest, installed_dir)?;
     append_audit(
         db,
@@ -2685,6 +2699,31 @@ DROP TABLE plugins;
     }
 
     #[test]
+    fn plugin_local_install_preview_blocks_unsigned_high_risk_with_default_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
+        let package_path = dir.path().join("preview-risky.aio-plugin");
+        let mut manifest = local_package_manifest("local.preview-risky", "1.0.0");
+        manifest["permissions"] = serde_json::json!(["request.body.read"]);
+        write_local_package(&package_path, manifest);
+
+        let preview = preview_plugin_from_local_package_with_policy(
+            &db,
+            &package_path,
+            &dir.path().join("plugins/cache"),
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy::default(),
+        )
+        .unwrap();
+
+        assert!(preview.blocking_reasons.iter().any(|notice| {
+            notice.code == "PLUGIN_UNSIGNED_HIGH_RISK_PERMISSION"
+                && notice.message.contains("request.body.read")
+        }));
+        assert!(repository::get_plugin(&db, "local.preview-risky").is_err());
+    }
+
+    #[test]
     fn plugin_local_update_preview_reports_permission_runtime_hook_and_config_changes() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
@@ -3693,5 +3732,59 @@ INSERT INTO plugin_market_sources(
             .installed_dir
             .as_deref()
             .is_some_and(|path| path.ends_with("plugins/installed/local.manual/1.0.0")));
+    }
+
+    #[test]
+    fn plugin_update_rollback_rejects_missing_historical_install_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
+        let cache_dir = dir.path().join("plugins/cache");
+        let installed_dir = dir.path().join("plugins/installed");
+        let v1_package = dir.path().join("plugin-v1.aio-plugin");
+        let v2_package = dir.path().join("plugin-v2.aio-plugin");
+        write_local_package(
+            &v1_package,
+            local_package_manifest("local.missing-rollback", "1.0.0"),
+        );
+        write_local_package(
+            &v2_package,
+            local_package_manifest("local.missing-rollback", "1.1.0"),
+        );
+        install_plugin_from_local_package_with_policy(
+            &db,
+            &v1_package,
+            &cache_dir,
+            &installed_dir,
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy {
+                allow_unsigned: true,
+                developer_mode: true,
+                ..LocalPackageInstallPolicy::default()
+            },
+        )
+        .unwrap();
+        update_plugin_from_local_package(
+            &db,
+            &v2_package,
+            &cache_dir,
+            &installed_dir,
+            env!("CARGO_PKG_VERSION"),
+            LocalPackageInstallPolicy {
+                allow_unsigned: true,
+                developer_mode: true,
+                ..LocalPackageInstallPolicy::default()
+            },
+        )
+        .unwrap();
+
+        let v1_installed_dir = installed_dir.join("local.missing-rollback").join("1.0.0");
+        assert!(v1_installed_dir.is_dir());
+        std::fs::remove_dir_all(&v1_installed_dir).unwrap();
+
+        let err = rollback_plugin_to_version(&db, "local.missing-rollback", "1.0.0").unwrap_err();
+
+        assert!(err.to_string().starts_with("PLUGIN_ROLLBACK_UNAVAILABLE:"));
+        let current = get_plugin_detail(&db, "local.missing-rollback").unwrap();
+        assert_eq!(current.summary.current_version.as_deref(), Some("1.1.0"));
     }
 }

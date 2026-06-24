@@ -2726,6 +2726,7 @@ export type PluginDetail = {
   pending_permissions: string[];
   audit_logs: PluginAuditLog[];
   runtime_failures: PluginRuntimeFailure[];
+  rollback_versions: string[];
 };
 export type PluginGetInput = { pluginId: string };
 export type PluginGrantPermissionsInput = { pluginId: string; permissions: string[] };

@@ -17,6 +17,7 @@ type PluginInstallPreviewDialogProps = {
 
 type PluginLifecycleNotice = PluginInstallPreview["warnings"][number];
 type PluginHookLifecycleSummary = PluginInstallPreview["hooks"][number];
+type NoticeVariant = "warning" | "destructive";
 
 function sourceLabel(source: string) {
   const labels: Record<string, string> = {
@@ -29,15 +30,22 @@ function sourceLabel(source: string) {
   return labels[source] ?? source;
 }
 
-function NoticeList({ notices }: { notices: readonly PluginLifecycleNotice[] }) {
+function NoticeList({
+  notices,
+  variant = "warning",
+}: {
+  notices: readonly PluginLifecycleNotice[];
+  variant?: NoticeVariant;
+}) {
   if (notices.length === 0) return null;
+  const className =
+    variant === "destructive"
+      ? "rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+      : "rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning";
   return (
     <div className="grid gap-2">
       {notices.map((notice) => (
-        <div
-          key={`${notice.severity}:${notice.code}:${notice.message}`}
-          className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
-        >
+        <div key={`${notice.severity}:${notice.code}:${notice.message}`} className={className}>
           <div className="font-medium">{notice.message}</div>
           <div className="mt-0.5 font-mono text-xs opacity-80">{notice.code}</div>
         </div>
@@ -217,7 +225,7 @@ export function PluginInstallPreviewDialog({
                 <AlertTriangle className="h-4 w-4" />
                 阻断项
               </div>
-              <NoticeList notices={preview.blockingReasons} />
+              <NoticeList notices={preview.blockingReasons} variant="destructive" />
             </div>
           ) : null}
 
