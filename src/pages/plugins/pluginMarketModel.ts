@@ -85,6 +85,12 @@ export const FEATURED_PLUGIN_CATALOG: PluginFeaturedCatalogItem[] = [
 ];
 
 const EXAMPLE_ONLY_REASON = "示例插件暂未发布为可安装包";
+const MISSING_TRUST_DATA_STATE: CardStateDetails = {
+  state: "missingTrustData",
+  action: "unavailable",
+  actionLabel: "不可安装",
+  disabledReason: "缺少下载地址或校验信息",
+};
 
 const SOURCE_LABELS: Record<PluginFeaturedCatalogItem["source"] | "custom", string> = {
   official: "官方来源",
@@ -139,7 +145,7 @@ export function buildMarketListingCards(
     return {
       pluginId: listing.pluginId,
       name: listing.name,
-      summary: "",
+      summary: "来自自定义市场源的插件。",
       category: "developer",
       latestVersion: listing.latestVersion,
       installedVersion,
@@ -153,6 +159,7 @@ export function buildMarketListingCards(
 }
 
 export function toMarketInstallInput(card: PluginMarketCardView): MarketInstallInput | null {
+  if (card.state !== "installable" && card.state !== "updateAvailable") return null;
   if (card.action !== "install" && card.action !== "update") return null;
   if (!card.listing?.downloadUrl || !card.listing.checksum) return null;
 
@@ -196,6 +203,10 @@ function getFeaturedState(
     };
   }
 
+  if (source === "market") {
+    return MISSING_TRUST_DATA_STATE;
+  }
+
   return {
     state: "installable",
     action: "install",
@@ -226,13 +237,8 @@ function getListingState(
     };
   }
 
-  if (!listing.downloadUrl || !listing.checksum) {
-    return {
-      state: "missingTrustData",
-      action: "unavailable",
-      actionLabel: "不可安装",
-      disabledReason: "缺少下载地址或校验信息",
-    };
+  if (listing.installBlockReason || !listing.downloadUrl || !listing.checksum) {
+    return MISSING_TRUST_DATA_STATE;
   }
 
   if (installedVersion && listing.updateAvailable) {

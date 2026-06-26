@@ -151,6 +151,47 @@ describe("pluginMarketModel", () => {
     expect(cards[3].disabledReason).toBe("缺少下载地址或校验信息");
   });
 
+  it("blocks market listings with unrecognized install block reasons", () => {
+    const [card] = buildMarketListingCards(
+      [],
+      [listing({ installBlockReason: "blocked-by-host" })]
+    );
+
+    expect(card).toMatchObject({
+      state: "missingTrustData",
+      action: "unavailable",
+      actionLabel: "不可安装",
+      disabledReason: "缺少下载地址或校验信息",
+    });
+    expect(card.disabledReason).not.toBe("blocked-by-host");
+    expect(toMarketInstallInput(card)).toBeNull();
+  });
+
+  it("blocks featured market cards when no listing is present", () => {
+    const [card] = buildFeaturedMarketCards(
+      [],
+      [
+        {
+          pluginId: "community.unroutable",
+          name: "Unroutable Market Card",
+          summary: "市场条目缺失 listing 时不可安装。",
+          category: "developer",
+          source: "market",
+          riskLabels: ["request.body.read"],
+        },
+      ]
+    );
+
+    expect(card).toMatchObject({
+      state: "missingTrustData",
+      action: "unavailable",
+      actionLabel: "不可安装",
+      disabledReason: "缺少下载地址或校验信息",
+      listing: null,
+    });
+    expect(toMarketInstallInput(card)).toBeNull();
+  });
+
   it("marks parsed market listings as updateable when installed and update is available", () => {
     const cards = buildMarketListingCards(
       [summary({ plugin_id: "community.safe-helper", current_version: "0.9.0" })],
