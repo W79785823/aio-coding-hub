@@ -154,6 +154,11 @@ const requiredDocs = [
       "example:response-guard",
       "fixtures/claude-request.json",
       "fixtures/response-warn.json",
+      "不是默认可安装市场包",
+      "checksum",
+      "signature",
+      "托管",
+      "市场索引流程",
     ],
   },
   {
@@ -227,6 +232,7 @@ const requiredDocs = [
       "默认市场视图",
       "自定义 market index 属于高级来源",
       "示例模板可以运行 publish-check",
+      "不代表示例已经被上传、签名、加入默认 market index",
     ],
   },
   {
