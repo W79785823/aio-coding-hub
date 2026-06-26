@@ -8,6 +8,7 @@ export type PluginMarketCardState =
   | "updateAvailable"
   | "incompatible"
   | "revoked"
+  | "reservedOfficial"
   | "missingTrustData"
   | "exampleOnly";
 
@@ -220,6 +221,15 @@ function getFeaturedState(
 }
 
 function getListingState(listing: PluginMarketListing, installed: boolean): CardStateDetails {
+  if (listing.installBlockReason === "reserved_official_namespace") {
+    return {
+      state: "reservedOfficial",
+      action: "unavailable",
+      actionLabel: "不可安装",
+      disabledReason: "官方命名空间只能通过内置官方插件安装",
+    };
+  }
+
   if (listing.revoked) {
     return {
       state: "revoked",

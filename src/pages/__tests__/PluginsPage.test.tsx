@@ -666,7 +666,7 @@ describe("pages/PluginsPage", () => {
     });
   });
 
-  it("routes advanced Privacy Filter listings through remote market install", async () => {
+  it("blocks advanced listings that use reserved official plugin ids", async () => {
     const installOfficialMutation = mutation();
     const installRemoteMutation = mutation();
     vi.mocked(usePluginInstallOfficialMutation).mockReturnValue(installOfficialMutation as any);
@@ -682,9 +682,9 @@ describe("pages/PluginsPage", () => {
         signature: "signed-privacy-filter",
         riskLabels: ["request.body.read", "request.body.write"],
         revoked: false,
-        compatible: true,
+        compatible: false,
         updateAvailable: false,
-        installBlockReason: null,
+        installBlockReason: "reserved_official_namespace",
       },
     ]);
     vi.mocked(usePluginsListQuery).mockReturnValue({
@@ -702,24 +702,11 @@ describe("pages/PluginsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "加载高级来源" }));
 
     const advancedListing = await screen.findByText("Privacy Filter Advanced");
-    fireEvent.click(
-      within(advancedListing.closest("article") as HTMLElement).getByRole("button", {
-        name: "安装",
-      })
-    );
-
-    await waitFor(() => {
-      expect(installRemoteMutation.mutateAsync).toHaveBeenCalledWith({
-        pluginId: "official.privacy-filter",
-        downloadUrl: "https://plugins.example.test/privacy-filter.aio-plugin",
-        checksum: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-        signature: "signed-privacy-filter",
-        publicKey: null,
-        marketSourceUrl: "https://plugins.example.test/index.json",
-        source: "market",
-      });
-      expect(installOfficialMutation.mutateAsync).not.toHaveBeenCalled();
-    });
+    const card = advancedListing.closest("article") as HTMLElement;
+    expect(within(card).getByText("官方命名空间只能通过内置官方插件安装")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "不可安装" })).toBeDisabled();
+    expect(installRemoteMutation.mutateAsync).not.toHaveBeenCalled();
+    expect(installOfficialMutation.mutateAsync).not.toHaveBeenCalled();
   });
 
   it("selects an installed featured Privacy Filter instead of reinstalling it", () => {

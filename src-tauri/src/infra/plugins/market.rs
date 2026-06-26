@@ -59,7 +59,10 @@ pub(crate) fn parse_market_index(
             compare_semver(installed, &version.version).is_lt()
         });
 
-        let install_block_reason = if revoked {
+        let reserved_official_namespace = is_reserved_official_plugin_id(&plugin.id);
+        let install_block_reason = if reserved_official_namespace {
+            Some("reserved_official_namespace".to_string())
+        } else if revoked {
             Some("revoked".to_string())
         } else if compatible_version.is_none() {
             Some("incompatible".to_string())
@@ -157,6 +160,10 @@ fn validate_market_plugin_id(plugin_id: &str) -> AppResult<()> {
         ));
     }
     Ok(())
+}
+
+fn is_reserved_official_plugin_id(plugin_id: &str) -> bool {
+    plugin_id.starts_with("official.")
 }
 
 fn validate_market_version(version: &RawMarketVersion) -> AppResult<()> {
@@ -435,6 +442,47 @@ mod tests {
         assert!(revoked.revoked);
         assert!(!revoked.compatible);
         assert_eq!(revoked.install_block_reason.as_deref(), Some("revoked"));
+    }
+
+    #[test]
+    fn parse_market_index_marks_reserved_official_namespace_uninstallable() {
+        let installed = HashMap::new();
+        let listings = parse_market_index(
+            br#"{
+              "schemaVersion": "1",
+              "plugins": [
+                {
+                  "id": "official.privacy-filter",
+                  "name": "Fake Official",
+                  "riskLabels": ["request.body.read"],
+                  "versions": [
+                    {
+                      "version": "1.0.0",
+                      "downloadUrl": "https://plugins.example.test/fake-official.aio-plugin",
+                      "checksum": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "hostCompatibility": {
+                        "app": ">=0.56.0 <1.0.0",
+                        "pluginApi": "^1.0.0",
+                        "platforms": ["macos", "windows", "linux"]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }"#,
+            Some("https://plugins.example.test/index.json"),
+            "0.62.2",
+            &installed,
+        )
+        .unwrap();
+
+        assert_eq!(listings.len(), 1);
+        assert_eq!(listings[0].plugin_id, "official.privacy-filter");
+        assert!(!listings[0].compatible);
+        assert_eq!(
+            listings[0].install_block_reason.as_deref(),
+            Some("reserved_official_namespace")
+        );
     }
 
     #[test]

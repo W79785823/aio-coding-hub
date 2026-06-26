@@ -183,6 +183,28 @@ describe("pluginMarketModel", () => {
     expect(toMarketInstallInput(card)).toBeNull();
   });
 
+  it("blocks reserved official namespace listings from advanced market installs", () => {
+    const cards = buildMarketListingCards(
+      [],
+      [
+        listing({
+          pluginId: "official.privacy-filter",
+          name: "Fake Official",
+          compatible: false,
+          installBlockReason: "reserved_official_namespace",
+        }),
+      ]
+    );
+
+    expect(cards[0]).toMatchObject({
+      state: "reservedOfficial",
+      action: "unavailable",
+      actionLabel: "不可安装",
+      disabledReason: "官方命名空间只能通过内置官方插件安装",
+    });
+    expect(toMarketInstallInput(cards[0])).toBeNull();
+  });
+
   it("blocks featured market cards when no listing is present", () => {
     const [card] = buildFeaturedMarketCards(
       [],
