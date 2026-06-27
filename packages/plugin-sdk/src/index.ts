@@ -341,6 +341,21 @@ const KNOWN_CAPABILITIES = new Set<PluginCapability>([
   "gateway.hooks",
 ]);
 
+const KNOWN_TARGET_CLI_KEYS = new Set(["claude", "codex", "gemini"]);
+const KNOWN_PROTOCOL_DIRECTIONS = new Set(["inbound", "outbound", "both"]);
+const KNOWN_UI_SCHEMA_TYPES = new Set(["section", "panel", "badge"]);
+const KNOWN_UI_FIELD_TYPES = new Set([
+  "text",
+  "password",
+  "number",
+  "boolean",
+  "select",
+  "textarea",
+  "info",
+  "button",
+]);
+const KNOWN_BADGE_TONES = new Set(["neutral", "success", "warning", "danger"]);
+
 export function permissionRisk(permission: PluginPermission): PluginPermissionRisk {
   return PERMISSION_RISKS[permission];
 }
@@ -356,10 +371,7 @@ export function validateManifest(manifest: PluginManifest): ValidationResult {
     return invalid("PLUGIN_INVALID_API_VERSION", "apiVersion must be SemVer");
   }
   if (semverMajor(manifest.apiVersion) !== 1) {
-    return invalid(
-      "PLUGIN_INCOMPATIBLE_API",
-      "apiVersion must use plugin API major version 1"
-    );
+    return invalid("PLUGIN_INCOMPATIBLE_API", "apiVersion must use plugin API major version 1");
   }
   if (manifest.runtime.kind === "declarativeRules" && manifest.runtime.rules.length === 0) {
     return invalid("PLUGIN_INVALID_RUNTIME", "declarativeRules runtime requires rules");
@@ -389,6 +401,8 @@ export function validateManifest(manifest: PluginManifest): ValidationResult {
     if (manifest.runtime.language !== "typescript") {
       return invalid("PLUGIN_INVALID_RUNTIME", "extensionHost language must be typescript");
     }
+    const activationError = validateActivationEvents(manifest.activationEvents);
+    if (activationError) return activationError;
     const contributionError = validateContributes(manifest.contributes ?? {});
     if (contributionError) return contributionError;
     return validateCapabilities(manifest.capabilities ?? []);
@@ -428,10 +442,265 @@ export function validateManifest(manifest: PluginManifest): ValidationResult {
   return { ok: true };
 }
 
+function validateActivationEvents(activationEvents: unknown): ValidationResult | null {
+  if (activationEvents == null) return null;
+  if (!Array.isArray(activationEvents)) {
+    return invalid("PLUGIN_INVALID_ACTIVATION_EVENT", "activationEvents must be an array");
+  }
+
+  for (const event of activationEvents) {
+    if (event === "onStartup") continue;
+    if (typeof event !== "string") {
+      return invalid("PLUGIN_INVALID_ACTIVATION_EVENT", "activation event must be a string");
+    }
+
+    const hasKnownPrefix = [
+      "onCommand:",
+      "onProviderEditor:",
+      "onProtocolBridge:",
+      "onGatewayHook:",
+    ].some((prefix) => event.startsWith(prefix) && event.slice(prefix.length).trim() !== "");
+    if (!hasKnownPrefix) {
+      return invalid("PLUGIN_INVALID_ACTIVATION_EVENT", `invalid activation event: ${event}`);
+    }
+  }
+  return null;
+}
+
 function validateContributes(contributes: PluginContributes): ValidationResult | null {
-  for (const slot of Object.keys(contributes.ui ?? {})) {
+  const raw = contributes as Record<string, unknown>;
+  const providerError = validateProviderContributions(raw.providers);
+  if (providerError) return providerError;
+  const protocolError = validateProtocolContributions(raw.protocols);
+  if (protocolError) return protocolError;
+  const protocolBridgeError = validateProtocolBridgeContributions(raw.protocolBridges);
+  if (protocolBridgeError) return protocolBridgeError;
+  const commandError = validateCommandContributions(raw.commands);
+  if (commandError) return commandError;
+  const gatewayHookError = validateGatewayHookContributions(raw.gatewayHooks);
+  if (gatewayHookError) return gatewayHookError;
+  const gatewayRuleError = validateGatewayRuleContributions(raw.gatewayRules);
+  if (gatewayRuleError) return gatewayRuleError;
+  return validateUiContributions(raw.ui);
+}
+
+function validateProviderContributions(providers: unknown): ValidationResult | null {
+  if (providers == null) return null;
+  if (!Array.isArray(providers)) {
+    return invalid("PLUGIN_INVALID_PROVIDER_CONTRIBUTION", "providers must be an array");
+  }
+  for (const provider of providers) {
+    const record = asRecord(provider);
+    if (
+      !record ||
+      !isNonEmptyString(record.providerType) ||
+      !isNonEmptyString(record.displayName) ||
+      !isNonEmptyString(record.extensionNamespace) ||
+      !Array.isArray(record.targetCliKeys) ||
+      record.targetCliKeys.length === 0 ||
+      !record.targetCliKeys.every(
+        (key) => typeof key === "string" && KNOWN_TARGET_CLI_KEYS.has(key)
+      )
+    ) {
+      return invalid(
+        "PLUGIN_INVALID_PROVIDER_CONTRIBUTION",
+        "provider contribution requires providerType, displayName, extensionNamespace, and targetCliKeys"
+      );
+    }
+  }
+  return null;
+}
+
+function validateProtocolContributions(protocols: unknown): ValidationResult | null {
+  if (protocols == null) return null;
+  if (!Array.isArray(protocols)) {
+    return invalid("PLUGIN_INVALID_PROTOCOL_CONTRIBUTION", "protocols must be an array");
+  }
+  for (const protocol of protocols) {
+    const record = asRecord(protocol);
+    if (
+      !record ||
+      !isNonEmptyString(record.protocolId) ||
+      typeof record.direction !== "string" ||
+      !KNOWN_PROTOCOL_DIRECTIONS.has(record.direction)
+    ) {
+      return invalid(
+        "PLUGIN_INVALID_PROTOCOL_CONTRIBUTION",
+        "protocol contribution requires protocolId and direction"
+      );
+    }
+  }
+  return null;
+}
+
+function validateProtocolBridgeContributions(protocolBridges: unknown): ValidationResult | null {
+  if (protocolBridges == null) return null;
+  if (!Array.isArray(protocolBridges)) {
+    return invalid(
+      "PLUGIN_INVALID_PROTOCOL_BRIDGE_CONTRIBUTION",
+      "protocolBridges must be an array"
+    );
+  }
+  for (const bridge of protocolBridges) {
+    const record = asRecord(bridge);
+    if (
+      !record ||
+      !isNonEmptyString(record.bridgeType) ||
+      !isNonEmptyString(record.inboundProtocol) ||
+      !isNonEmptyString(record.outboundProtocol) ||
+      (record.supportsStreaming !== undefined && typeof record.supportsStreaming !== "boolean")
+    ) {
+      return invalid(
+        "PLUGIN_INVALID_PROTOCOL_BRIDGE_CONTRIBUTION",
+        "protocol bridge contribution requires bridgeType, inboundProtocol, and outboundProtocol"
+      );
+    }
+  }
+  return null;
+}
+
+function validateCommandContributions(commands: unknown): ValidationResult | null {
+  if (commands == null) return null;
+  if (!Array.isArray(commands)) {
+    return invalid("PLUGIN_INVALID_COMMAND_CONTRIBUTION", "commands must be an array");
+  }
+  for (const command of commands) {
+    const record = asRecord(command);
+    if (!record || !isNonEmptyString(record.command) || !isNonEmptyString(record.title)) {
+      return invalid(
+        "PLUGIN_INVALID_COMMAND_CONTRIBUTION",
+        "command contribution requires command and title"
+      );
+    }
+  }
+  return null;
+}
+
+function validateGatewayHookContributions(gatewayHooks: unknown): ValidationResult | null {
+  if (gatewayHooks == null) return null;
+  if (!Array.isArray(gatewayHooks)) {
+    return invalid("PLUGIN_UNKNOWN_HOOK", "gatewayHooks must be an array");
+  }
+  for (const hook of gatewayHooks) {
+    const record = asRecord(hook);
+    if (!record || typeof record.name !== "string") {
+      return invalid("PLUGIN_UNKNOWN_HOOK", "gateway hook contribution requires name");
+    }
+    if (RESERVED_HOOKS.has(record.name as GatewayHookName)) {
+      return invalid(
+        "PLUGIN_RESERVED_HOOK",
+        `hook is reserved for a future host integration and is not active in plugin API v1: ${record.name}`
+      );
+    }
+    if (!KNOWN_HOOKS.has(record.name as GatewayHookName)) {
+      return invalid("PLUGIN_UNKNOWN_HOOK", `unknown hook: ${record.name}`);
+    }
+  }
+  return null;
+}
+
+function validateGatewayRuleContributions(gatewayRules: unknown): ValidationResult | null {
+  if (gatewayRules == null) return null;
+  if (!Array.isArray(gatewayRules)) {
+    return invalid("PLUGIN_INVALID_GATEWAY_RULE_CONTRIBUTION", "gatewayRules must be an array");
+  }
+  for (const rule of gatewayRules) {
+    const record = asRecord(rule);
+    if (
+      !record ||
+      !Array.isArray(record.rules) ||
+      record.rules.length === 0 ||
+      !record.rules.every(isNonEmptyString)
+    ) {
+      return invalid(
+        "PLUGIN_INVALID_GATEWAY_RULE_CONTRIBUTION",
+        "gateway rule contribution requires non-empty rules"
+      );
+    }
+  }
+  return null;
+}
+
+function validateUiContributions(ui: unknown): ValidationResult | null {
+  if (ui == null) return null;
+  const uiRecord = asRecord(ui);
+  if (!uiRecord) {
+    return invalid("PLUGIN_INVALID_UI_CONTRIBUTION", "ui contributions must be an object");
+  }
+
+  for (const [slot, contributions] of Object.entries(uiRecord)) {
     if (!KNOWN_UI_SLOTS.has(slot as UiContributionSlot)) {
       return invalid("PLUGIN_UNKNOWN_UI_SLOT", `unknown UI contribution slot: ${slot}`);
+    }
+    if (!Array.isArray(contributions)) {
+      return invalid("PLUGIN_INVALID_UI_CONTRIBUTION", "UI slot contributions must be an array");
+    }
+    for (const contribution of contributions) {
+      const contributionError = validateUiContribution(contribution);
+      if (contributionError) return contributionError;
+    }
+  }
+  return null;
+}
+
+function validateUiContribution(contribution: unknown): ValidationResult | null {
+  const record = asRecord(contribution);
+  if (!record || !isNonEmptyString(record.id)) {
+    return invalid("PLUGIN_INVALID_UI_CONTRIBUTION", "UI contribution requires id");
+  }
+  const schema = asRecord(record.schema);
+  if (!schema || typeof schema.type !== "string" || !KNOWN_UI_SCHEMA_TYPES.has(schema.type)) {
+    return invalid("PLUGIN_INVALID_UI_CONTRIBUTION", "UI contribution requires supported schema");
+  }
+  if (schema.type === "section" || schema.type === "panel") {
+    if (!Array.isArray(schema.fields)) {
+      return invalid("PLUGIN_INVALID_UI_CONTRIBUTION", "section and panel schemas require fields");
+    }
+    for (const field of schema.fields) {
+      const fieldError = validateHostRenderedField(field);
+      if (fieldError) return fieldError;
+    }
+    return null;
+  }
+  if (!isNonEmptyString(schema.label)) {
+    return invalid("PLUGIN_INVALID_UI_CONTRIBUTION", "badge schema requires label");
+  }
+  if (
+    schema.tone !== undefined &&
+    (typeof schema.tone !== "string" || !KNOWN_BADGE_TONES.has(schema.tone))
+  ) {
+    return invalid("PLUGIN_INVALID_UI_CONTRIBUTION", "badge schema tone is not supported");
+  }
+  return null;
+}
+
+function validateHostRenderedField(field: unknown): ValidationResult | null {
+  const record = asRecord(field);
+  if (
+    !record ||
+    typeof record.type !== "string" ||
+    !KNOWN_UI_FIELD_TYPES.has(record.type) ||
+    !isNonEmptyString(record.key) ||
+    !isNonEmptyString(record.label)
+  ) {
+    return invalid("PLUGIN_INVALID_UI_CONTRIBUTION", "UI field requires type, key, and label");
+  }
+  if (record.type === "button" && !isNonEmptyString(record.command)) {
+    return invalid("PLUGIN_INVALID_UI_CONTRIBUTION", "button field requires command");
+  }
+  if (record.type === "select") {
+    if (!Array.isArray(record.options) || record.options.length === 0) {
+      return invalid("PLUGIN_INVALID_UI_CONTRIBUTION", "select field requires options");
+    }
+    for (const option of record.options) {
+      const optionRecord = asRecord(option);
+      if (
+        !optionRecord ||
+        !isNonEmptyString(optionRecord.value) ||
+        !isNonEmptyString(optionRecord.label)
+      ) {
+        return invalid("PLUGIN_INVALID_UI_CONTRIBUTION", "select option requires value and label");
+      }
     }
   }
   return null;
@@ -444,6 +713,17 @@ function validateCapabilities(capabilities: readonly PluginCapability[]): Valida
     }
   }
   return { ok: true };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
 }
 
 function invalid(code: string, message: string): ValidationResult {

@@ -126,6 +126,84 @@ describe("validateManifest", () => {
     expect(validateManifest(manifest)).toEqual({ ok: true });
   });
 
+  test("rejects malformed provider contribution", () => {
+    const manifest = {
+      ...openRouterManifest,
+      contributes: {
+        providers: [
+          {
+            providerType: "",
+            displayName: "OpenRouter",
+            targetCliKeys: ["claude", "openai"],
+            extensionNamespace: "openrouter",
+          },
+        ],
+      },
+    };
+
+    expect(validateManifest(manifest as PluginManifest)).toMatchObject({
+      ok: false,
+      error: { code: "PLUGIN_INVALID_PROVIDER_CONTRIBUTION" },
+    });
+  });
+
+  test("rejects malformed protocol bridge contribution", () => {
+    const manifest = {
+      ...openRouterManifest,
+      contributes: {
+        protocolBridges: [
+          {
+            bridgeType: "acme.bridge.openai-gemini",
+            inboundProtocol: "openai.chat",
+            outboundProtocol: "gemini.generateContent",
+            supportsStreaming: "yes",
+          },
+        ],
+      },
+    };
+
+    expect(validateManifest(manifest as unknown as PluginManifest)).toMatchObject({
+      ok: false,
+      error: { code: "PLUGIN_INVALID_PROTOCOL_BRIDGE_CONTRIBUTION" },
+    });
+  });
+
+  test("rejects invalid UI field schema", () => {
+    const manifest = {
+      ...openRouterManifest,
+      contributes: {
+        ui: {
+          "providers.editor.sections": [
+            {
+              id: "openrouter-routing",
+              schema: {
+                type: "section",
+                fields: [{ type: "button", key: "refresh", label: "Refresh" }],
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    expect(validateManifest(manifest as PluginManifest)).toMatchObject({
+      ok: false,
+      error: { code: "PLUGIN_INVALID_UI_CONTRIBUTION" },
+    });
+  });
+
+  test("rejects invalid activation event", () => {
+    const manifest = {
+      ...openRouterManifest,
+      activationEvents: ["onStartup", "onCommand:"],
+    };
+
+    expect(validateManifest(manifest as PluginManifest)).toMatchObject({
+      ok: false,
+      error: { code: "PLUGIN_INVALID_ACTIVATION_EVENT" },
+    });
+  });
+
   it("rejects reserved hooks until the host wires them", () => {
     const result = validateManifest({
       ...manifest,

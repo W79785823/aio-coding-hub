@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use super::plugin_contributions::{is_known_capability, is_known_ui_slot, PluginContributes};
+use super::plugin_contributions::{
+    is_known_capability, is_known_ui_slot, HostRenderedField, HostRenderedSchema, PluginContributes,
+};
 
 pub type PluginId = String;
 
@@ -477,6 +479,7 @@ pub fn validate_manifest(
     validate_runtime(manifest)?;
     match &manifest.runtime {
         PluginRuntime::ExtensionHost { .. } => {
+            validate_activation_events(&manifest.activation_events)?;
             validate_contributes(manifest.contributes.as_ref())?;
             validate_capabilities(&manifest.capabilities)?;
         }
@@ -624,19 +627,190 @@ fn validate_runtime(manifest: &PluginManifest) -> Result<(), PluginValidationErr
     Ok(())
 }
 
+fn validate_activation_events(activation_events: &[String]) -> Result<(), PluginValidationError> {
+    for event in activation_events {
+        if event == "onStartup" {
+            continue;
+        }
+        let has_known_prefix = [
+            "onCommand:",
+            "onProviderEditor:",
+            "onProtocolBridge:",
+            "onGatewayHook:",
+        ]
+        .iter()
+        .any(|prefix| {
+            event
+                .strip_prefix(prefix)
+                .is_some_and(|value| !value.trim().is_empty())
+        });
+        if !has_known_prefix {
+            return Err(PluginValidationError::new(
+                "PLUGIN_INVALID_ACTIVATION_EVENT",
+                format!("invalid activation event: {event}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_contributes(
     contributes: Option<&PluginContributes>,
 ) -> Result<(), PluginValidationError> {
     let Some(contributes) = contributes else {
         return Ok(());
     };
-    for slot in contributes.ui.keys() {
+
+    for provider in &contributes.providers {
+        if is_blank(&provider.provider_type)
+            || is_blank(&provider.display_name)
+            || is_blank(&provider.extension_namespace)
+            || provider.target_cli_keys.is_empty()
+        {
+            return Err(PluginValidationError::new(
+                "PLUGIN_INVALID_PROVIDER_CONTRIBUTION",
+                "provider contribution requires providerType, displayName, extensionNamespace, and targetCliKeys",
+            ));
+        }
+    }
+
+    for protocol in &contributes.protocols {
+        if is_blank(&protocol.protocol_id) {
+            return Err(PluginValidationError::new(
+                "PLUGIN_INVALID_PROTOCOL_CONTRIBUTION",
+                "protocol contribution requires protocolId",
+            ));
+        }
+    }
+
+    for bridge in &contributes.protocol_bridges {
+        if is_blank(&bridge.bridge_type)
+            || is_blank(&bridge.inbound_protocol)
+            || is_blank(&bridge.outbound_protocol)
+        {
+            return Err(PluginValidationError::new(
+                "PLUGIN_INVALID_PROTOCOL_BRIDGE_CONTRIBUTION",
+                "protocol bridge contribution requires bridgeType, inboundProtocol, and outboundProtocol",
+            ));
+        }
+    }
+
+    for command in &contributes.commands {
+        if is_blank(&command.command) || is_blank(&command.title) {
+            return Err(PluginValidationError::new(
+                "PLUGIN_INVALID_COMMAND_CONTRIBUTION",
+                "command contribution requires command and title",
+            ));
+        }
+    }
+
+    for hook in &contributes.gateway_hooks {
+        validate_hook(hook)?;
+    }
+
+    for rule in &contributes.gateway_rules {
+        if rule.rules.is_empty() || rule.rules.iter().any(|item| is_blank(item)) {
+            return Err(PluginValidationError::new(
+                "PLUGIN_INVALID_GATEWAY_RULE_CONTRIBUTION",
+                "gateway rule contribution requires non-empty rules",
+            ));
+        }
+        for hook in &rule.hooks {
+            validate_hook_name(hook)?;
+        }
+    }
+
+    for (slot, ui_contributions) in &contributes.ui {
         if !is_known_ui_slot(slot) {
             return Err(PluginValidationError::new(
                 "PLUGIN_UNKNOWN_UI_SLOT",
                 format!("unknown UI contribution slot: {slot}"),
             ));
         }
+        for contribution in ui_contributions {
+            validate_ui_contribution(contribution)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_ui_contribution(
+    contribution: &super::plugin_contributions::UiContribution,
+) -> Result<(), PluginValidationError> {
+    if is_blank(&contribution.id) {
+        return Err(PluginValidationError::new(
+            "PLUGIN_INVALID_UI_CONTRIBUTION",
+            "UI contribution requires id",
+        ));
+    }
+
+    match &contribution.schema {
+        HostRenderedSchema::Section { fields } | HostRenderedSchema::Panel { fields } => {
+            for field in fields {
+                validate_host_rendered_field(field)?;
+            }
+        }
+        HostRenderedSchema::Badge { label, .. } => {
+            if is_blank(label) {
+                return Err(PluginValidationError::new(
+                    "PLUGIN_INVALID_UI_CONTRIBUTION",
+                    "badge schema requires label",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_host_rendered_field(field: &HostRenderedField) -> Result<(), PluginValidationError> {
+    match field {
+        HostRenderedField::Text { key, label, .. }
+        | HostRenderedField::Password { key, label, .. }
+        | HostRenderedField::Number { key, label, .. }
+        | HostRenderedField::Boolean { key, label }
+        | HostRenderedField::Textarea { key, label, .. }
+        | HostRenderedField::Info { key, label, .. } => validate_ui_field_key_label(key, label),
+        HostRenderedField::Button {
+            key,
+            label,
+            command,
+        } => {
+            validate_ui_field_key_label(key, label)?;
+            if is_blank(command) {
+                return Err(PluginValidationError::new(
+                    "PLUGIN_INVALID_UI_CONTRIBUTION",
+                    "button field requires command",
+                ));
+            }
+            Ok(())
+        }
+        HostRenderedField::Select {
+            key,
+            label,
+            options,
+        } => {
+            validate_ui_field_key_label(key, label)?;
+            if options.is_empty()
+                || options
+                    .iter()
+                    .any(|option| is_blank(&option.value) || is_blank(&option.label))
+            {
+                return Err(PluginValidationError::new(
+                    "PLUGIN_INVALID_UI_CONTRIBUTION",
+                    "select field requires options",
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_ui_field_key_label(key: &str, label: &str) -> Result<(), PluginValidationError> {
+    if is_blank(key) || is_blank(label) {
+        return Err(PluginValidationError::new(
+            "PLUGIN_INVALID_UI_CONTRIBUTION",
+            "UI field requires key and label",
+        ));
     }
     Ok(())
 }
@@ -653,6 +827,10 @@ fn validate_capabilities(capabilities: &[String]) -> Result<(), PluginValidation
     Ok(())
 }
 
+fn is_blank(value: &str) -> bool {
+    value.trim().is_empty()
+}
+
 fn validate_hooks(hooks: &[PluginHook]) -> Result<(), PluginValidationError> {
     if hooks.is_empty() {
         return Err(PluginValidationError::new(
@@ -661,21 +839,30 @@ fn validate_hooks(hooks: &[PluginHook]) -> Result<(), PluginValidationError> {
         ));
     }
     for hook in hooks {
-        if is_reserved_gateway_hook(&hook.name) {
-            return Err(PluginValidationError::new(
-                "PLUGIN_RESERVED_HOOK",
-                format!(
-                    "hook is reserved for a future host integration and is not active in plugin API v1: {}",
-                    hook.name
-                ),
-            ));
-        }
-        if !is_known_hook(&hook.name) {
-            return Err(PluginValidationError::new(
-                "PLUGIN_UNKNOWN_HOOK",
-                format!("unknown hook: {}", hook.name),
-            ));
-        }
+        validate_hook(hook)?;
+    }
+    Ok(())
+}
+
+fn validate_hook(hook: &PluginHook) -> Result<(), PluginValidationError> {
+    validate_hook_name(&hook.name)
+}
+
+fn validate_hook_name(hook_name: &str) -> Result<(), PluginValidationError> {
+    if is_reserved_gateway_hook(hook_name) {
+        return Err(PluginValidationError::new(
+            "PLUGIN_RESERVED_HOOK",
+            format!(
+                "hook is reserved for a future host integration and is not active in plugin API v1: {}",
+                hook_name
+            ),
+        ));
+    }
+    if !is_known_hook(hook_name) {
+        return Err(PluginValidationError::new(
+            "PLUGIN_UNKNOWN_HOOK",
+            format!("unknown hook: {}", hook_name),
+        ));
     }
     Ok(())
 }
@@ -987,6 +1174,33 @@ mod tests {
 
         let err = validate_manifest(&manifest, "0.62.0").unwrap_err();
         assert_eq!(err.code, "PLUGIN_UNKNOWN_UI_SLOT");
+    }
+
+    #[test]
+    fn extension_host_manifest_rejects_invalid_provider_contribution() {
+        let manifest = serde_json::json!({
+            "id": "acme.bad-provider",
+            "name": "Bad Provider",
+            "version": "0.1.0",
+            "apiVersion": "1.0.0",
+            "main": "dist/extension.js",
+            "runtime": { "kind": "extensionHost", "language": "typescript" },
+            "activationEvents": ["onStartup"],
+            "contributes": {
+                "providers": [{
+                    "providerType": "",
+                    "displayName": "OpenRouter",
+                    "targetCliKeys": ["claude"],
+                    "extensionNamespace": "openrouter"
+                }]
+            },
+            "capabilities": [],
+            "hostCompatibility": { "app": ">=0.62.0 <1.0.0", "pluginApi": "^1.0.0" }
+        });
+        let manifest: PluginManifest = serde_json::from_value(manifest).unwrap();
+
+        let err = validate_manifest(&manifest, "0.62.0").unwrap_err();
+        assert_eq!(err.code, "PLUGIN_INVALID_PROVIDER_CONTRIBUTION");
     }
 
     #[test]
