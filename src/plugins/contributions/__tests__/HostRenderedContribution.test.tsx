@@ -7,6 +7,7 @@ function makeContribution(partial: Partial<ActiveUiContribution> = {}): ActiveUi
   return {
     pluginId: "acme.openrouter",
     contributionId: "openrouter-routing",
+    providerExtensionNamespace: null,
     slotId: "providers.editor.sections",
     title: "OpenRouter 路由",
     order: 10,

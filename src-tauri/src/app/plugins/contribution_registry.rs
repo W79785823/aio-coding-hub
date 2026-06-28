@@ -12,6 +12,7 @@ use crate::shared::error::AppResult;
 pub struct ActiveUiContribution {
     pub plugin_id: String,
     pub contribution_id: String,
+    pub provider_extension_namespace: Option<String>,
     pub slot_id: String,
     pub title: Option<String>,
     pub order: i32,
@@ -98,6 +99,10 @@ impl ActiveContributionSnapshot {
             let plugin_id = plugin.manifest.id.as_str();
             let Some(contributes) = plugin.manifest.contributes.as_ref() else {
                 continue;
+            };
+            let provider_extension_namespace_for_ui = match contributes.providers.as_slice() {
+                [provider] => Some(provider.extension_namespace.clone()),
+                _ => None,
             };
 
             for provider in &contributes.providers {
@@ -195,6 +200,7 @@ impl ActiveContributionSnapshot {
                     snapshot.ui.push(ActiveUiContribution {
                         plugin_id: plugin_id.to_string(),
                         contribution_id: contribution.id.clone(),
+                        provider_extension_namespace: provider_extension_namespace_for_ui.clone(),
                         slot_id: slot_id.clone(),
                         title: contribution.title.clone(),
                         order: contribution.order.unwrap_or(0),
@@ -355,6 +361,51 @@ mod contribution_registry_tests {
         assert_eq!(err.code(), "PLUGIN_INVALID_CONTRIBUTION_ID");
     }
 
+    #[test]
+    fn contribution_registry_sets_provider_extension_namespace_for_single_provider_ui() {
+        let plugin = plugin_detail_with_provider_and_ui(
+            "acme.provider",
+            vec![provider_contribution("acme.provider.codex", "shared")],
+            "providers.editor.sections",
+            ui_contribution("routing-panel", 0),
+        );
+
+        let snapshot =
+            ActiveContributionSnapshot::from_plugin_details(&[plugin]).expect("snapshot");
+
+        let ui = snapshot.ui_for_slot("providers.editor.sections");
+        assert_eq!(
+            ui[0].provider_extension_namespace.as_deref(),
+            Some("shared")
+        );
+    }
+
+    #[test]
+    fn contribution_registry_omits_provider_extension_namespace_without_exactly_one_provider() {
+        let no_provider =
+            plugin_detail_with_raw_ui_slot("acme.no-provider", "providers.editor.sections");
+        let two_providers = plugin_detail_with_provider_and_ui(
+            "acme.multi-provider",
+            vec![
+                provider_contribution("acme.multi-provider.codex", "codex"),
+                provider_contribution("acme.multi-provider.gemini", "gemini"),
+            ],
+            "providers.editor.sections",
+            ui_contribution("routing-panel", 0),
+        );
+
+        let snapshot =
+            ActiveContributionSnapshot::from_plugin_details(&[no_provider, two_providers])
+                .expect("snapshot");
+
+        let namespaces: Vec<_> = snapshot
+            .ui_for_slot("providers.editor.sections")
+            .iter()
+            .map(|item| item.provider_extension_namespace.as_deref())
+            .collect();
+        assert_eq!(namespaces, vec![None, None]);
+    }
+
     fn plugin_detail_with_ui(
         plugin_id: &str,
         status: PluginStatus,
@@ -403,15 +454,37 @@ mod contribution_registry_tests {
     fn plugin_detail_with_provider(plugin_id: &str, provider_type: &str) -> PluginDetail {
         let mut detail = plugin_detail(plugin_id, PluginStatus::Enabled);
         detail.manifest.contributes = Some(PluginContributes {
-            providers: vec![ProviderContribution {
-                provider_type: provider_type.to_string(),
-                display_name: "Provider".to_string(),
-                target_cli_keys: vec![TargetCliKey::Codex],
-                extension_namespace: plugin_id.to_string(),
-            }],
+            providers: vec![provider_contribution(provider_type, plugin_id)],
             ..empty_contributes()
         });
         detail
+    }
+
+    fn plugin_detail_with_provider_and_ui(
+        plugin_id: &str,
+        providers: Vec<ProviderContribution>,
+        slot_id: &str,
+        contribution: UiContribution,
+    ) -> PluginDetail {
+        let mut detail = plugin_detail(plugin_id, PluginStatus::Enabled);
+        detail.manifest.contributes = Some(PluginContributes {
+            providers,
+            ui: BTreeMap::from([(slot_id.to_string(), vec![contribution])]),
+            ..empty_contributes()
+        });
+        detail
+    }
+
+    fn provider_contribution(
+        provider_type: &str,
+        extension_namespace: &str,
+    ) -> ProviderContribution {
+        ProviderContribution {
+            provider_type: provider_type.to_string(),
+            display_name: "Provider".to_string(),
+            target_cli_keys: vec![TargetCliKey::Codex],
+            extension_namespace: extension_namespace.to_string(),
+        }
     }
 
     fn plugin_detail_with_protocol_bridge(plugin_id: &str, bridge_type: &str) -> PluginDetail {

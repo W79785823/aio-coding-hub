@@ -91,10 +91,8 @@ export function ProviderEditorDialog(props: ProviderEditorDialogProps) {
 
         <ContributionSlot
           slotId="providers.editor.sections"
-          valuesByContributionId={f.extensionValuesByContributionId}
-          onChange={(contribution, key, value) =>
-            f.setExtensionValue(contribution.contributionId, key, value)
-          }
+          valuesByContributionKey={f.extensionValuesByContributionKey}
+          onChange={(contribution, key, value) => f.setExtensionValue(contribution, key, value)}
           disabled={f.saving}
         />
 

@@ -2082,6 +2082,7 @@ export type ActiveProviderContribution = {
 export type ActiveUiContribution = {
   pluginId: string;
   contributionId: string;
+  providerExtensionNamespace: string | null;
   slotId: string;
   title: string | null;
   order: number;

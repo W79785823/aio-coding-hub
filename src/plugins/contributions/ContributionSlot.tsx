@@ -1,10 +1,10 @@
 import { HostRenderedContribution } from "./HostRenderedContribution";
 import { useContributionsForSlot } from "./useActiveContributions";
-import type { ContributionSlotProps } from "./types";
+import { contributionKey, type ContributionSlotProps } from "./types";
 
 export function ContributionSlot({
   slotId,
-  valuesByContributionId = {},
+  valuesByContributionKey = {},
   onChange,
   onCommand,
   disabled,
@@ -19,7 +19,7 @@ export function ContributionSlot({
         <HostRenderedContribution
           key={`${contribution.pluginId}:${contribution.contributionId}`}
           contribution={contribution}
-          values={valuesByContributionId[contribution.contributionId] ?? {}}
+          values={valuesByContributionKey[contributionKey(contribution)] ?? {}}
           onChange={(fieldKey, value) => onChange?.(contribution, fieldKey, value)}
           onCommand={onCommand}
           disabled={disabled}

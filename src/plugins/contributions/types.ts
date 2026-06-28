@@ -7,6 +7,12 @@ export type UiContributionSlotId =
 
 export type ContributionValues = Record<string, JsonValue>;
 
+export function contributionKey(
+  contribution: Pick<ActiveUiContribution, "pluginId" | "contributionId">
+) {
+  return `${contribution.pluginId}\u0000${contribution.contributionId}`;
+}
+
 export type ContributionCommandContext = {
   pluginId: string;
   contributionId: string;
@@ -27,7 +33,7 @@ export type HostRenderedContributionProps = {
 
 export type ContributionSlotProps = {
   slotId: UiContributionSlotId;
-  valuesByContributionId?: Record<string, ContributionValues>;
+  valuesByContributionKey?: Record<string, ContributionValues>;
   onChange?: (contribution: ActiveUiContribution, key: string, value: JsonValue) => void;
   onCommand?: ContributionCommandHandler;
   disabled?: boolean;

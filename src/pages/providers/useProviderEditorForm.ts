@@ -45,19 +45,12 @@ import { useProviderEditorEffects } from "./useProviderEditorEffects";
 import { providerOAuthCancelDeviceFlow } from "../../services/providers/providers";
 import { logToConsole } from "../../services/consoleLog";
 import { useContributionsForSlot } from "../../plugins/contributions/useActiveContributions";
-import type { ContributionValues } from "../../plugins/contributions/types";
+import { contributionKey, type ContributionValues } from "../../plugins/contributions/types";
 
 type StoredProviderExtensionValues = ProviderSummary["extension_values"][number];
 
 function isContributionValues(value: JsonValue | null | undefined): value is ContributionValues {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function inferExtensionNamespace(contributionId: string, pluginId: string) {
-  const trimmedContributionId = contributionId.trim();
-  const [prefix] = trimmedContributionId.split("-");
-  if (prefix && prefix !== trimmedContributionId) return prefix;
-  return pluginId;
 }
 
 function extensionValueKey(pluginId: string, namespace: string) {
@@ -68,18 +61,18 @@ function resolveExtensionNamespace(
   contribution: ActiveUiContribution,
   existingValues: StoredProviderExtensionValues[]
 ) {
-  const inferredNamespace = inferExtensionNamespace(
-    contribution.contributionId,
-    contribution.pluginId
-  );
-  const exactExisting = existingValues.find(
-    (value) => value.pluginId === contribution.pluginId && value.namespace === inferredNamespace
-  );
-  if (exactExisting) return exactExisting.namespace;
+  const declaredNamespace = contribution.providerExtensionNamespace;
+  if (declaredNamespace) {
+    const exactExisting = existingValues.find(
+      (value) => value.pluginId === contribution.pluginId && value.namespace === declaredNamespace
+    );
+    if (exactExisting) return exactExisting.namespace;
+  }
 
   return (
     existingValues.find((value) => value.pluginId === contribution.pluginId)?.namespace ??
-    inferredNamespace
+    declaredNamespace ??
+    contribution.pluginId
   );
 }
 
@@ -95,7 +88,7 @@ function deriveExtensionValuesByContribution(
       existingValues.find(
         (value) => value.pluginId === contribution.pluginId && value.namespace === namespace
       ) ?? existingValues.find((value) => value.pluginId === contribution.pluginId);
-    next[contribution.contributionId] = isContributionValues(existing?.values)
+    next[contributionKey(contribution)] = isContributionValues(existing?.values)
       ? { ...existing.values }
       : {};
   }
@@ -105,7 +98,7 @@ function deriveExtensionValuesByContribution(
 
 function buildExtensionValuesInput(
   contributions: ActiveUiContribution[],
-  valuesByContributionId: Record<string, ContributionValues>,
+  valuesByContributionKey: Record<string, ContributionValues>,
   existingValues: StoredProviderExtensionValues[]
 ): ProviderExtensionValuesInput[] | null {
   if (contributions.length === 0) return null;
@@ -118,7 +111,7 @@ function buildExtensionValuesInput(
     const rowKey = extensionValueKey(contribution.pluginId, namespace);
     activeKeys.add(rowKey);
     const existingRow = activeRows.get(rowKey);
-    const nextValues = valuesByContributionId[contribution.contributionId] ?? {};
+    const nextValues = valuesByContributionKey[contributionKey(contribution)] ?? {};
 
     activeRows.set(rowKey, {
       pluginId: contribution.pluginId,
@@ -206,7 +199,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
   const form = useForm<ProviderEditorDialogFormInput>({ defaultValues: DEFAULT_FORM_VALUES });
   const editProviderSnapshotRef = useRef<ProviderSummary | null>(null);
   const extensionValuesResetKeyRef = useRef<string | null>(null);
-  const [extensionValuesByContributionId, setExtensionValuesByContributionId] = useState<
+  const [extensionValuesByContributionKey, setExtensionValuesByContributionKey] = useState<
     Record<string, ContributionValues>
   >({});
 
@@ -264,7 +257,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
     if (!open) {
       if (extensionValuesResetKeyRef.current !== null) {
         extensionValuesResetKeyRef.current = null;
-        setExtensionValuesByContributionId({});
+        setExtensionValuesByContributionKey({});
       }
       return;
     }
@@ -278,7 +271,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
     if (extensionValuesResetKeyRef.current === resetKey) return;
     extensionValuesResetKeyRef.current = resetKey;
 
-    setExtensionValuesByContributionId(
+    setExtensionValuesByContributionKey(
       deriveExtensionValuesByContribution(
         providerEditorContributions,
         mode === "edit" ? existingExtensionValues : []
@@ -295,11 +288,12 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
   ]);
 
   const setExtensionValue = useCallback(
-    (contributionId: string, fieldKey: string, value: JsonValue) => {
-      setExtensionValuesByContributionId((prev) => ({
+    (contribution: ActiveUiContribution, fieldKey: string, value: JsonValue) => {
+      const key = contributionKey(contribution);
+      setExtensionValuesByContributionKey((prev) => ({
         ...prev,
-        [contributionId]: {
-          ...(prev[contributionId] ?? {}),
+        [key]: {
+          ...(prev[key] ?? {}),
           [fieldKey]: value,
         },
       }));
@@ -436,7 +430,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
       formValues: form.getValues(),
       extensionValues: buildExtensionValuesInput(
         providerEditorContributions,
-        extensionValuesByContributionId,
+        extensionValuesByContributionKey,
         mode === "edit" ? existingExtensionValues : []
       ),
     }),
@@ -456,7 +450,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
       selectedCx2ccSourceProvider,
       form,
       providerEditorContributions,
-      extensionValuesByContributionId,
+      extensionValuesByContributionKey,
       existingExtensionValues,
     ]
   );
@@ -624,7 +618,7 @@ export function useProviderEditorForm(props: ProviderEditorDialogProps) {
     codexGatewayBaseUrl,
     cx2ccFallbackModels,
     codexProviders,
-    extensionValuesByContributionId,
+    extensionValuesByContributionKey,
     setExtensionValue,
     save: () => runProviderEditorSave(buildSaveContext()),
     copyApiKey: () => copyApiKeyAction(buildCopyApiKeyContext()),
