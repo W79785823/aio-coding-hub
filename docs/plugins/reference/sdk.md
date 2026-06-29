@@ -1,8 +1,6 @@
 # 插件 SDK
 
-`@aio-coding-hub/plugin-sdk` 提供插件 manifest、hooks、permissions、runtimes 和 validation helpers 的共享 TypeScript 契约。
-
-`aio-plugin-wasm-sdk` 提供与之匹配的 Rust/WASM ABI contracts，用于编译为 WebAssembly 的代码插件。
+`@aio-coding-hub/plugin-sdk` 提供 Extension Host 插件 manifest、hooks、permissions、capabilities 和 validation helpers 的共享 TypeScript 契约。
 
 SDK 面向这些场景：
 
@@ -17,14 +15,12 @@ SDK 面向这些场景：
 
 ```text
 packages/plugin-sdk
-packages/plugin-wasm-sdk
 ```
 
 运行 SDK 检查：
 
 ```bash
 pnpm --filter @aio-coding-hub/plugin-sdk typecheck
-pnpm plugin-wasm-sdk:test
 ```
 
 ## 主要类型
@@ -33,10 +29,12 @@ TypeScript SDK 导出：
 
 - `PluginManifest`
 - `PluginRuntime`
+- `ExtensionRuntime`
 - `PluginHook`
 - `GatewayHookName`
 - `PluginPermission`
 - `PluginPermissionRisk`
+- `PluginCapability`
 - `PluginHookContext`
 - `PluginHookResult`
 
@@ -59,24 +57,12 @@ pnpm create-aio-plugin pack ./acme.redactor
 ```json
 {
   "severity": "error",
-  "code": "PLUGIN_RULE_PERMISSION_MISMATCH",
-  "message": "rule targeting request.body with action replace requires request.body.write",
-  "path": "rules/main.json#/rules/0",
-  "hint": "Add request.body.write to manifest.permissions or change the rule target/action."
+  "code": "PLUGIN_MISSING_CAPABILITY",
+  "message": "gatewayHooks contribution requires gateway.hooks",
+  "path": "plugin.json#/capabilities",
+  "hint": "Add gateway.hooks to manifest.capabilities or remove contributes.gatewayHooks."
 }
 ```
-
-Rust/WASM SDK 导出：
-
-- `PluginManifest`
-- `PluginRuntime`
-- `PluginHook`
-- `PluginHostCompatibility`
-- `HookRequest`
-- `HookResult`
-- `HookAction`
-- `aio_plugin_entrypoint!`
-- pointer/length helpers for the ABI return value
 
 ## TypeScript 中的最小 Manifest
 
@@ -89,11 +75,15 @@ const manifest: PluginManifest = {
   name: "Acme Redactor",
   version: "0.1.0",
   apiVersion: "1.0.0",
-  runtime: { kind: "declarativeRules", rules: ["rules/main.json"] },
-  hooks: [{ name: "gateway.request.afterBodyRead", priority: 50 }],
-  permissions: ["request.body.read", "request.body.write"],
+  main: "dist/extension.js",
+  runtime: { kind: "extensionHost", language: "typescript" },
+  activationEvents: ["onGatewayHook:gateway.request.afterBodyRead"],
+  contributes: {
+    gatewayHooks: [{ name: "gateway.request.afterBodyRead", priority: 50 }]
+  },
+  capabilities: ["gateway.hooks"],
   hostCompatibility: {
-    app: ">=0.56.0 <1.0.0",
+    app: ">=0.60.0 <1.0.0",
     pluginApi: "^1.0.0",
     platforms: ["macos", "windows", "linux"]
   },
@@ -118,11 +108,36 @@ if (!result.ok) {
 }
 ```
 
+Extension Host 入口示例：
+
+```js
+module.exports.activate = function(api) {
+  api.gateway.registerHook("gateway.request.afterBodyRead", function(context) {
+    const body = String(context?.request?.body ?? "");
+    if (!body.includes("SECRET_TOKEN")) return { action: "continue" };
+    return {
+      action: "replace",
+      requestBody: body.replaceAll("SECRET_TOKEN", "[REDACTED]")
+    };
+  });
+};
+```
+
+## Capability 依赖
+
+`validateManifest` 会检查贡献点需要的 capability：
+
+| Contribution | Capability |
+| --- | --- |
+| `commands` | `commands.execute` |
+| `providers` | `provider.extensionValues` |
+| provider UI sections / fields / badges / actions | `provider.extensionValues` |
+| `gatewayHooks` | `gateway.hooks` |
+| `protocolBridges` | `protocol.bridge` |
+
 ## SDK 边界
 
 SDK 是契约包。它不执行插件代码，也不会授予宿主能力。
-
-Rust/WASM SDK 遵循同样边界。它只负责序列化 ABI-compatible JSON、定义 hook result helpers，并提供 `aio_plugin_entrypoint!` macro 用于导出 `aio_plugin_handle`。
 
 `PluginHookResult` 使用与 gateway host 相同的 active mutation envelope：
 
@@ -134,30 +149,16 @@ const result = {
 } satisfies PluginHookResult;
 ```
 
-替换内容时使用 `requestBody`、`responseBody`、`streamChunk`、`logMessage` 和 `headers`。`contextPatch` 不是 active vNext gateway mutation field。
+替换内容时使用 `requestBody`、`responseBody`、`streamChunk`、`logMessage` 和 `headers`。`contextPatch` 不是 active gateway mutation field。
 
 真正的宿主强制检查仍发生在 Rust application 中：
 
 - manifest compatibility checks。
-- permission grants。
+- capability grants。
 - hook context trimming。
 - mutation permission enforcement。
 - runtime timeout 和 failure policy handling。
 - package checksum/signature verification。
-
-## Rust/WASM 示例
-
-仓库内包含一个最小 WASM redactor example：
-
-```text
-packages/plugin-wasm-sdk/examples/redactor
-```
-
-可以这样测试：
-
-```bash
-pnpm plugin-wasm-sdk:test
-```
 
 ## 版本建议
 

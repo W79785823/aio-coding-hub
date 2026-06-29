@@ -1,6 +1,8 @@
 # 插件 Manifest v1
 
-`plugin.json` 是插件与 AIO Coding Hub 之间稳定的 package contract。Manifest v1 优先支持声明式规则插件；当 host policy 启用时支持 WASM code plugins；同时保留少量 official-only native engines。
+`plugin.json` 是插件与 AIO Coding Hub 之间稳定的 package contract。Plugin API v1 的社区插件只有一种公开运行时：Extension Host。社区插件必须提供 `main`，声明 `runtime.kind = "extensionHost"`，并把 TypeScript 或 JavaScript 源码打包成宿主可加载的 JavaScript 输出。
+
+Official Privacy Filter 仍然保留为 host-owned built-in。它不是第三方 runtime，也不是社区插件可以选择的运行方式。
 
 ## 1. 必填字段
 
@@ -10,16 +12,19 @@
 | `name` | string | 展示给用户的名称。 |
 | `version` | string | 插件版本，使用 SemVer。 |
 | `apiVersion` | string | 插件 API 版本，例如 `1.0.0`。 |
-| `runtime` | object | 运行时声明。 |
-| `hooks` | array | Hook 注册信息。 |
-| `permissions` | array | 请求的权限。 |
+| `main` | string | Extension Host 入口文件；`main` points at bundled JavaScript output，例如 `dist/extension.js`。 |
+| `runtime` | object | 必须是 `runtime.kind = "extensionHost"`，`language` 必须是 `typescript`。 |
 | `hostCompatibility` | object | 支持的 AIO Coding Hub 宿主版本范围。 |
+
+Extension Host manifest 不再使用 top-level `hooks` 或 top-level `permissions`。Hook、command、provider UI 和 protocol bridge 通过 `contributes` 声明；宿主用 `capabilities` 控制这些贡献点是否可以生效。
 
 ## 2. 可选字段
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `entry` | string | 运行时 artifact path，例如 `plugin.wasm`；声明式规则不需要该字段。 |
+| `activationEvents` | array | Extension Host 激活事件，例如 `onGatewayHook:gateway.request.afterBodyRead`。 |
+| `contributes` | object | `commands`、`providers`、`protocolBridges`、`gatewayHooks` 和 host-rendered `ui` 贡献点。 |
+| `capabilities` | array | 插件声明自己需要的宿主能力，例如 `capabilities: ["gateway.hooks"]`。 |
 | `configSchema` | object | 用于用户配置的 JSON Schema subset。 |
 | `configVersion` | integer | 配置 schema 版本。 |
 | `description` | string | 展示给用户的简短摘要。 |
@@ -48,30 +53,23 @@ Versions 必须遵循 SemVer。Pre-release versions 可用于本地开发和 uns
 
 ## 4. Runtime
 
-Runtime v1 支持社区声明式规则：
+Extension Host 是唯一 community runtime：
 
 ```json
 {
-  "kind": "declarativeRules",
-  "rules": ["rules/main.json"]
+  "main": "dist/extension.js",
+  "runtime": {
+    "kind": "extensionHost",
+    "language": "typescript"
+  }
 }
 ```
 
-WASM runtime：
+`main` 必须是包内相对路径，指向 `.js` 或 `.cjs` 文件。推荐源码使用 TypeScript 或 JavaScript，发布包只携带打包后的 JavaScript 输出。宿主负责加载、激活、超时控制、失败策略和 dispose；插件不能直接创建或持有宿主 runtime 实例。
 
-```json
-{
-  "kind": "wasm",
-  "abiVersion": "1.0.0",
-  "memoryLimitBytes": 16777216
-}
-```
+旧的 declarative rules、WASM、process 和第三方 native 运行时属于 unsupported pre-release legacy runtime。公开社区插件不能声明这些运行时；迁移文档只保留用于解释旧包为什么会被拒绝。
 
-WASM packages are installable only when host policy enables execution。未启用 WASM execution 的宿主必须拒绝或禁用 WASM plugins，不能把它们路由到其他 runtime。
-
-短期 validation 必须拒绝 arbitrary JavaScript/TypeScript、Node.js、Deno、native dynamic libraries 和 WebView code。
-
-Official-only native runtime：
+Official-only host-owned built-in runtime：
 
 ```json
 {
@@ -80,7 +78,7 @@ Official-only native runtime：
 }
 ```
 
-`native` 只保留给从 built-in official source 安装的 built-in official plugins。第三方包不能声明 host-native engines。
+`native:privacyFilter` 只用于 `official.privacy-filter`，由宿主持有和发布。第三方包不能声明 host-native engines。
 
 ## 5. Host Compatibility
 
@@ -88,7 +86,7 @@ Official-only native runtime：
 
 ```json
 {
-  "app": ">=0.56.0 <1.0.0",
+  "app": ">=0.60.0 <1.0.0",
   "pluginApi": "^1.0.0",
   "platforms": ["macos", "windows", "linux"]
 }
@@ -96,7 +94,24 @@ Official-only native runtime：
 
 不兼容插件会被标记为 `incompatible`，不会进入 hook pipeline。
 
-## 6. Hook v1
+## 6. Contributions 与 Capabilities
+
+Contribution points 只描述插件希望接入的位置；capability 才是宿主授权对应贡献点的开关。缺少依赖 capability 的 manifest 会被拒绝。
+
+| Contribution | Required capability |
+| --- | --- |
+| `commands` | `commands -> commands.execute` |
+| `providers` | `providers / provider UI -> provider.extensionValues` |
+| `ui.providers.editor.sections` | `providers / provider UI -> provider.extensionValues` |
+| `ui.providers.editor.fields` | `providers / provider UI -> provider.extensionValues` |
+| `ui.providers.card.badges` | `providers / provider UI -> provider.extensionValues` |
+| `ui.providers.card.actions` | `providers / provider UI -> provider.extensionValues` |
+| `gatewayHooks` | `gatewayHooks -> gateway.hooks` |
+| `protocolBridges` | `protocolBridges -> protocol.bridge` |
+
+Gateway integration 必须使用 `contributes.gatewayHooks` + `capabilities: ["gateway.hooks"]` + Extension Host 入口中的 `api.gateway.registerHook`。
+
+## 7. Hook v1
 
 Active hooks in plugin API v1 是当前已经接入 gateway 或 log pipeline 的 hooks。Reserved hooks for future host integration 会被记录下来以稳定命名；但在宿主实现对应调用点前，manifest validation 会用 `PLUGIN_RESERVED_HOOK` 拒绝它们。
 
@@ -117,7 +132,7 @@ Reserved hooks：
 - `gateway.request.beforeProviderResolution`
 - `gateway.response.headers`
 
-## 7. Permission v1
+## 8. Permission v1
 
 Reserved permissions for future host-mediated APIs 会被记录下来以稳定命名；但在这些 API 存在前，manifest validation 会用 `PLUGIN_RESERVED_PERMISSION` 拒绝它们。
 
@@ -151,7 +166,7 @@ Reserved permissions：
 
 插件升级新增权限必须重新授权。The host must keep the plugin disabled or partially disabled until the new permissions are approved。
 
-## 8. Hook 与 Permission 兼容性
+## 9. Hook 与 Permission 兼容性
 
 Validation 会拒绝：
 
@@ -159,13 +174,14 @@ Validation 会拒绝：
 - Reserved hook names。
 - Unknown permissions。
 - Reserved permissions。
+- 缺少贡献点所需 capability。
 - 为不能修改的 hooks 请求 write permissions。
 - 没有 `request.header.readSensitive` 却读取 sensitive header。
 - 没有匹配 body read/write permission 却写 body。
 - 没有 `stream.modify` 却执行 `stream.modify` actions。
 - 在 host 提供对应 API 前请求 `network.fetch`、`file.read`、`file.write` 或 `secret.read`。
 
-## 9. Config Schema 子集
+## 10. Config Schema 子集
 
 受支持的 `configSchema` subset 包括：
 
@@ -180,7 +196,7 @@ Validation 会拒绝：
 
 插件不能提供 custom GUI code。宿主负责渲染表单、保存前校验，并在启用前再次校验。Sensitive values 不会以 plaintext 返回前端。
 
-## 10. 状态机
+## 11. 状态机
 
 状态：
 
@@ -198,23 +214,23 @@ Validation 会拒绝：
 | From | To | Trigger |
 | --- | --- | --- |
 | `available` | `installed` | 用户安装 package 或 market plugin。 |
-| `installed` | `enabled` | 用户授权 required permissions 且配置有效。 |
+| `installed` | `enabled` | 用户授权 required capabilities 且配置有效。 |
 | `installed` | `disabled` | 用户安装但不启用。 |
 | `enabled` | `disabled` | 用户禁用插件。 |
 | `disabled` | `enabled` | 用户在校验通过后启用插件。 |
 | `enabled` | `update_available` | Market 发现新的兼容版本。 |
 | `disabled` | `update_available` | Market 发现新的兼容版本。 |
-| `update_available` | `enabled` | 更新成功且 permissions 仍有效。 |
-| `update_available` | `disabled` | 更新成功但需要新的 permission approval。 |
+| `update_available` | `enabled` | 更新成功且 capabilities 仍有效。 |
+| `update_available` | `disabled` | 更新成功但需要新的 approval。 |
 | `installed` | `incompatible` | Host/API/platform version 不兼容。 |
 | `enabled` | `quarantined` | 重复 crash、timeout、signature failure 或 revoked market status。 |
 | `disabled` | `quarantined` | Signature failure 或 revoked market status。 |
 | `quarantined` | `disabled` | 用户确认并在校验后恢复。 |
 | any active state | `uninstalled` | 用户卸载插件。 |
 
-Upgrade failure 会恢复 previous version、config snapshot、permissions 和 enabled state。Signature failure 会让插件进入 `quarantined`。Runtime crash 和 repeated timeout 可以让 enabled plugin 进入 `quarantined`。
+Upgrade failure 会恢复 previous version、config snapshot、capabilities 和 enabled state。Signature failure 会让插件进入 `quarantined`。Runtime crash 和 repeated timeout 可以让 enabled plugin 进入 `quarantined`。
 
-## 11. Manifest 示例：社区 Prompt Helper
+## 12. Manifest 示例：社区 Prompt Helper
 
 ```json
 {
@@ -222,20 +238,24 @@ Upgrade failure 会恢复 previous version、config snapshot、permissions 和 e
   "name": "Prompt Helper",
   "version": "1.0.0",
   "apiVersion": "1.0.0",
+  "main": "dist/extension.js",
   "runtime": {
-    "kind": "declarativeRules",
-    "rules": ["rules/main.json"]
+    "kind": "extensionHost",
+    "language": "typescript"
   },
-  "hooks": [
-    {
-      "name": "gateway.request.afterBodyRead",
-      "priority": 100,
-      "failurePolicy": "fail-open"
-    }
-  ],
-  "permissions": ["request.body.read", "request.body.write"],
+  "activationEvents": ["onGatewayHook:gateway.request.afterBodyRead"],
+  "contributes": {
+    "gatewayHooks": [
+      {
+        "name": "gateway.request.afterBodyRead",
+        "priority": 100,
+        "failurePolicy": "fail-open"
+      }
+    ]
+  },
+  "capabilities": ["gateway.hooks"],
   "hostCompatibility": {
-    "app": ">=0.56.0 <1.0.0",
+    "app": ">=0.60.0 <1.0.0",
     "pluginApi": "^1.0.0",
     "platforms": ["macos", "windows", "linux"]
   },
@@ -246,21 +266,30 @@ Upgrade failure 会恢复 previous version、config snapshot、permissions 和 e
       "mode": {
         "type": "string",
         "enum": ["append_instruction", "prepend_context"]
-      },
-      "onlyModels": {
-        "type": "array",
-        "items": { "type": "string" }
-      },
-      "onlyClis": {
-        "type": "array",
-        "items": { "type": "string", "enum": ["claude", "codex", "gemini"] }
       }
     }
   }
 }
 ```
 
-## 12. Manifest 示例：Privacy Filter
+`dist/extension.js`：
+
+```js
+module.exports.activate = function(api) {
+  api.gateway.registerHook("gateway.request.afterBodyRead", function(context) {
+    const body = String(context?.request?.body ?? "");
+    if (!body) return { action: "continue" };
+    return {
+      action: "replace",
+      requestBody: body.replace("DRAFT_PROMPT", "Please answer concisely.")
+    };
+  });
+};
+```
+
+## 13. Manifest 示例：Privacy Filter
+
+`official.privacy-filter` 是 host-owned built-in。它保留在 manifest contract 中是为了让宿主官方插件可被同一套安装、配置和审计 UI 描述，不表示第三方插件可以使用该 runtime。
 
 ```json
 {
@@ -269,7 +298,7 @@ Upgrade failure 会恢复 previous version、config snapshot、permissions 和 e
   "version": "1.0.0",
   "apiVersion": "1.0.0",
   "category": "privacy",
-  "description": "Official native privacy filter aligned with packyme/privacy-filter for pre-upstream prompt and log redaction.",
+  "description": "Official host-owned privacy filter aligned with packyme/privacy-filter for pre-upstream prompt and log redaction.",
   "homepage": "https://github.com/packyme/privacy-filter",
   "repository": {
     "type": "git",
@@ -280,39 +309,10 @@ Upgrade failure 会恢复 previous version、config snapshot、permissions 和 e
     "kind": "native",
     "engine": "privacyFilter"
   },
-  "hooks": [
-    {
-      "name": "gateway.request.afterBodyRead",
-      "priority": 5,
-      "failurePolicy": "fail-closed"
-    },
-    {
-      "name": "log.beforePersist",
-      "priority": 1,
-      "failurePolicy": "fail-closed"
-    }
-  ],
-  "permissions": ["request.body.read", "request.body.write", "log.redact"],
   "hostCompatibility": {
-    "app": ">=0.56.0 <1.0.0",
+    "app": ">=0.60.0 <1.0.0",
     "pluginApi": "^1.0.0",
     "platforms": ["macos", "windows", "linux"]
-  },
-  "configSchema": {
-    "type": "object",
-    "required": ["redactBeforeUpstream", "redactLogs", "profile"],
-    "properties": {
-      "redactBeforeUpstream": {
-        "type": "boolean"
-      },
-      "redactLogs": {
-        "type": "boolean"
-      },
-      "profile": {
-        "type": "string",
-        "enum": ["balanced"]
-      }
-    }
   }
 }
 ```

@@ -119,14 +119,14 @@ export function describePluginRuntime(runtime: string): RuntimeDescription {
   if (runtime === "native:privacyFilter") {
     return {
       label: "内置隐私过滤引擎",
-      detail: "由 AIO Coding Hub 提供，用于本地处理。",
+      detail: "由 AIO Coding Hub 宿主持有，只用于官方内置隐私过滤。",
     };
   }
 
   if (runtime === "extensionHost") {
     return {
       label: "扩展主机插件",
-      detail: "通过 AIO Coding Hub 扩展主机运行插件逻辑。",
+      detail: "通过 Extension Host 运行打包后的 TypeScript/JavaScript 插件输出。",
     };
   }
 

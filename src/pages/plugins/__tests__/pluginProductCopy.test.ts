@@ -34,13 +34,22 @@ describe("pluginProductCopy", () => {
   it("describes runtimes without making implementation jargon primary", () => {
     expect(describePluginRuntime("native:privacyFilter")).toEqual({
       label: "内置隐私过滤引擎",
-      detail: "由 AIO Coding Hub 提供，用于本地处理。",
+      detail: "由 AIO Coding Hub 宿主持有，只用于官方内置隐私过滤。",
     });
     expect(describePluginRuntime("extensionHost")).toEqual({
       label: "扩展主机插件",
-      detail: "通过 AIO Coding Hub 扩展主机运行插件逻辑。",
+      detail: "通过 Extension Host 运行打包后的 TypeScript/JavaScript 插件输出。",
     });
-    expect(describePluginRuntime("declarativeRules")).toEqual({
+    for (const runtime of ["declarativeRules", "wasm", "process", "native"]) {
+      expect(describePluginRuntime(runtime)).toEqual({
+        label: "不支持的旧插件运行时",
+        detail: "该插件使用预发布时期的运行方式，请安装 Extension Host 版本。",
+      });
+    }
+  });
+
+  it("does not present legacy runtimes as user choices", () => {
+    expect(describePluginRuntime("wasm")).toEqual({
       label: "不支持的旧插件运行时",
       detail: "该插件使用预发布时期的运行方式，请安装 Extension Host 版本。",
     });

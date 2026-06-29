@@ -2,7 +2,7 @@
 
 官方 catalog 会刻意保持很小。`official.privacy-filter` 是当前唯一 bundled official plugin。
 
-这样可以让 trusted host surface 保持收敛，同时继续通过 `declarativeRules`、WASM 和默认关闭的进程运行时 PoC 提供开放扩展能力。
+这样可以让 trusted host surface 保持收敛，同时把社区扩展统一放在 Extension Host。Declarative rules、WASM、process 和第三方 native 只作为 unsupported pre-release legacy runtime 迁移说明保留。
 
 ## 当前官方 ID
 
@@ -20,7 +20,7 @@ ID: `official.privacy-filter`
 
 Runtime: `native:privacyFilter`
 
-它对齐 [packyme/privacy-filter](https://github.com/packyme/privacy-filter) 的核心 redaction behavior。
+它是 host-owned built-in，对齐 [packyme/privacy-filter](https://github.com/packyme/privacy-filter) 的核心 redaction behavior。
 
 它展示了 prompts 和 request logs 的 pre-upstream privacy filtering。
 
@@ -51,7 +51,7 @@ Provider request shapes：
 
 Gateway boundary note：Privacy Filter 会接收原始 client-to-gateway body，因为 gateway 必须先看到 prompt 才能脱敏。它的保护保证是：当插件启用并选中匹配策略和处理范围后，gateway-to-upstream provider request body 中的白名单字段和 persisted request logs 会被脱敏。日志脱敏由 `redactLogs` 和 `sensitiveTypes` 控制，不受 request `redactionScopes` 影响。如果你检查 hook 执行前的本地 client request，仍可能看到原始输入。
 
-Official privacy filter rules are loaded under a 1 MiB host byte budget. Community plugins cannot use `native:privacyFilter`; community redaction plugins should use `declarativeRules` until WASM is fully lifecycle-managed.
+Official privacy filter rules are loaded under a 1 MiB host byte budget。社区插件不能使用 `native:privacyFilter`；community redaction plugins should use Extension Host gateway hooks.
 
 重要限制：
 
@@ -71,7 +71,7 @@ Official privacy filter rules are loaded under a 1 MiB host byte budget. Communi
 - 能被宿主导出的 trace replay fixture 覆盖至少一个正常路径和一个边界路径。
 - 能通过 `create-aio-plugin publish-check` 生成市场发布 metadata。
 
-社区示例应优先使用 `declarativeRules`。只有当行为需要确定性代码执行且规则运行时无法表达时，才考虑 WASM。WASM examples 可以展示 ABI packaging，但 gateway execution 在宿主启用前仍受策略限制。
+社区示例应使用 Extension Host。Gateway 行为通过 `contributes.gatewayHooks` 和 `api.gateway.registerHook` 表达；旧运行时只用于迁移说明。
 
 ## Replay 与发布流程
 
@@ -85,9 +85,9 @@ Official privacy filter rules are loaded under a 1 MiB host byte budget. Communi
 
 类似行为应实现为社区插件：
 
-- Prompt rewriting：在 `gateway.request.afterBodyRead` 上使用 `declarativeRules`。
-- Response safety checks：在 `gateway.response.after` 或 `gateway.response.chunk` 上使用 `declarativeRules`。
-- Generic log redaction：在 `log.beforePersist` 上使用 `declarativeRules`；规则运行时表达力不够时再考虑 WASM。
+- Prompt rewriting：用 Extension Host 在 `gateway.request.afterBodyRead` 上注册 gateway hook。
+- Response safety checks：用 Extension Host 在 `gateway.response.after` 或 `gateway.response.chunk` 上注册 gateway hook。
+- Generic log redaction：用 Extension Host 在 `log.beforePersist` 上注册 gateway hook。
 
 ## 代码位置
 

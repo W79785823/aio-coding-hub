@@ -109,6 +109,14 @@ function requireUniqueArray(path, values) {
   }
 }
 
+function requireArrayEquals(path, values, expected) {
+  const array = requireArray(path, values);
+  if (array.length !== expected.length || array.some((value, index) => value !== expected[index])) {
+    failures.push(`${path} must equal [${expected.join(", ")}]`);
+  }
+  return array;
+}
+
 function requireOneOf(path, value, allowed) {
   if (!allowed.includes(value)) {
     failures.push(`${path} must be one of ${allowed.join(", ")}`);
@@ -124,6 +132,11 @@ const contract = readJson(contractPath);
 
 if (contract) {
   const runtimes = requireObject(`${contractPath}.runtimes`, contract.runtimes) ?? {};
+  for (const legacyRuntime of ["declarativeRules", "wasm", "process", "native"]) {
+    if (Object.prototype.hasOwnProperty.call(runtimes, legacyRuntime)) {
+      failures.push(`${contractPath}.runtimes must not expose ${legacyRuntime}`);
+    }
+  }
   const extensionHostRuntime = requireObject(
     `${contractPath}.runtimes.extensionHost`,
     runtimes.extensionHost
@@ -135,6 +148,12 @@ if (contract) {
     if (extensionHostRuntime.requiresMain !== true) {
       failures.push(`${contractPath}.runtimes.extensionHost.requiresMain must be true`);
     }
+    requireIncludes(
+      `${contractPath}.runtimes.extensionHost`,
+      JSON.stringify(extensionHostRuntime),
+      ["mainOutput", "allowedMainExtensions", "lifecycle", "hookTimeoutMs", "dispose"],
+      "Extension Host runtime lifecycle"
+    );
   }
   const extensionHostContract = requireObject(
     `${contractPath}.extensionHostContract`,
@@ -150,9 +169,35 @@ if (contract) {
     if (extensionHostContract.requiresMain !== true) {
       failures.push(`${contractPath}.extensionHostContract.requiresMain must be true`);
     }
+    requireIncludes(
+      `${contractPath}.extensionHostContract`,
+      JSON.stringify(extensionHostContract),
+      ["entryField", "mainOutput", "supportedSourceLanguages", "api.gateway.registerHook"],
+      "Extension Host contract fields"
+    );
+  }
+  requireArrayEquals(`${contractPath}.communityRuntimes`, contract.communityRuntimes, [
+    "extensionHost",
+  ]);
+  const unsupportedLegacyRuntimes = requireArray(
+    `${contractPath}.unsupportedLegacyRuntimes`,
+    contract.unsupportedLegacyRuntimes
+  );
+  for (const legacyRuntime of ["declarativeRules", "wasm", "process", "native"]) {
+    if (!unsupportedLegacyRuntimes.includes(legacyRuntime)) {
+      failures.push(`${contractPath}.unsupportedLegacyRuntimes must include ${legacyRuntime}`);
+    }
+  }
+  if (contract.policyGatedRuntimes !== undefined) {
+    failures.push(`${contractPath}.policyGatedRuntimes must not expose public community runtimes`);
   }
   const capabilities = requireArray(`${contractPath}.capabilities`, contract.capabilities);
-  for (const capability of ["gateway.hooks", "protocol.bridge", "commands.execute"]) {
+  for (const capability of [
+    "gateway.hooks",
+    "protocol.bridge",
+    "commands.execute",
+    "provider.extensionValues",
+  ]) {
     if (!capabilities.includes(capability)) {
       failures.push(`${contractPath}.capabilities must include ${capability}`);
     }
@@ -164,6 +209,29 @@ if (contract) {
   for (const contribution of ["gatewayHooks", "protocolBridges", "commands"]) {
     if (!contributionPoints.includes(contribution)) {
       failures.push(`${contractPath}.contributionPoints must include ${contribution}`);
+    }
+  }
+  if (contributionPoints.includes("gatewayRules")) {
+    failures.push(`${contractPath}.contributionPoints must not include gatewayRules`);
+  }
+  const capabilityDependencies =
+    requireObject(`${contractPath}.capabilityDependencies`, contract.capabilityDependencies) ?? {};
+  for (const [contribution, requiredCapabilities] of Object.entries({
+    commands: ["commands.execute"],
+    providers: ["provider.extensionValues"],
+    gatewayHooks: ["gateway.hooks"],
+    protocolBridges: ["protocol.bridge"],
+  })) {
+    const actual = requireArray(
+      `${contractPath}.capabilityDependencies.${contribution}`,
+      capabilityDependencies[contribution]
+    );
+    for (const capability of requiredCapabilities) {
+      if (!actual.includes(capability)) {
+        failures.push(
+          `${contractPath}.capabilityDependencies.${contribution} must include ${capability}`
+        );
+      }
     }
   }
 

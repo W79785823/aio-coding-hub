@@ -4,10 +4,10 @@
 
 核心规则：
 
-- no arbitrary JavaScript：任意 JavaScript 不会在 Rust 主进程中执行。
-- no arbitrary JavaScript：任意 JavaScript 不会在 Tauri WebView 中执行。
-- WASM 不提供 WASI filesystem 或 network imports。
-- Process runtime PoC 默认关闭。
+- Extension Host 是唯一 community runtime。
+- 不在 Rust 主进程或 Tauri WebView 执行第三方插件代码。
+- Extension Host 只暴露 capability-gated APIs。
+- Legacy WASM、process 和 declarative rules 都是 unsupported pre-release legacy runtime。
 - Hook 失败必须记录审计事件。
 - 高风险 hook 可以使用 fail-closed 策略。
 - 重复 runtime failure 可以让插件进入 `quarantined` 状态。

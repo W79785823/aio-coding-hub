@@ -7,18 +7,18 @@
     "extensionHost": {
       "language": "typescript",
       "requiresMain": true,
+      "mainOutput": "bundled JavaScript or CommonJS file",
+      "allowedMainExtensions": [".js", ".cjs"],
+      "lifecycle": {
+        "activation": "host-managed worker activation from manifest main",
+        "hookTimeoutMs": 150,
+        "failurePolicy": "fail-open by default",
+        "dispose": "host disposes worker state when plugin snapshot changes, disables, updates, or uninstalls"
+      },
       "status": "contract"
     },
-    "declarativeRules": {
-      "status": "legacy",
-      "requiresHooks": true
-    },
-    "wasm": {
-      "status": "policy-gated",
-      "requiresHooks": true
-    },
     "native:privacyFilter": {
-      "status": "official"
+      "status": "official-host-owned"
     }
   },
   "activationEvents": [
@@ -58,9 +58,18 @@
     "protocolBridges",
     "commands",
     "gatewayHooks",
-    "gatewayRules",
     "ui"
   ],
+  "capabilityDependencies": {
+    "commands": ["commands.execute"],
+    "providers": ["provider.extensionValues"],
+    "ui.providers.editor.sections": ["provider.extensionValues"],
+    "ui.providers.editor.fields": ["provider.extensionValues"],
+    "ui.providers.card.badges": ["provider.extensionValues"],
+    "ui.providers.card.actions": ["provider.extensionValues"],
+    "gatewayHooks": ["gateway.hooks"],
+    "protocolBridges": ["protocol.bridge"]
+  },
   "providerContribution": {
     "requiredFields": ["providerType", "displayName", "targetCliKeys", "extensionNamespace"],
     "targetCliKeys": ["claude", "codex", "gemini"]
@@ -255,9 +264,20 @@
     "runtime": "extensionHost",
     "language": "typescript",
     "requiresMain": true,
+    "entryField": "main",
+    "mainOutput": "dist/extension.js",
+    "supportedSourceLanguages": ["typescript", "javascript"],
+    "bundleOutputLanguages": ["javascript", "commonjs"],
+    "lifecycle": {
+      "activate": "module exports activate(api)",
+      "gatewayRegistration": "api.gateway.registerHook",
+      "defaultHookTimeoutMs": 150,
+      "defaultFailurePolicy": "fail-open",
+      "dispose": "host-managed"
+    },
     "status": "mainline-contract"
   },
-  "communityRuntimes": ["declarativeRules"],
-  "policyGatedRuntimes": ["wasm"],
+  "communityRuntimes": ["extensionHost"],
+  "unsupportedLegacyRuntimes": ["declarativeRules", "wasm", "process", "native"],
   "officialRuntimes": ["native:privacyFilter"]
 }

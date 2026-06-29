@@ -28,6 +28,15 @@ const requiredDocs = [
       "SemVer",
       "apiVersion",
       "hostCompatibility",
+      "main",
+      "runtime.kind = \"extensionHost\"",
+      "contributes.gatewayHooks",
+      "capabilities: [\"gateway.hooks\"]",
+      "api.gateway.registerHook",
+      "commands -> commands.execute",
+      "providers / provider UI -> provider.extensionValues",
+      "gatewayHooks -> gateway.hooks",
+      "protocolBridges -> protocol.bridge",
       "gateway.response.chunk",
       "Active hooks in plugin API v1",
       "Reserved hooks for future host integration",
@@ -39,6 +48,7 @@ const requiredDocs = [
       "高危权限需要二次授权",
       "插件升级新增权限必须重新授权",
     ],
+    forbiddenPhrases: ['"kind": "declarativeRules"', '"kind": "wasm"', '"gatewayRules"'],
   },
   {
     path: "docs/plugins/README.md",
@@ -58,10 +68,15 @@ const requiredDocs = [
     phrases: [
       "插件开发总指南",
       "plugin.json",
-      "declarativeRules",
+      "Extension Host",
       "doctor -> validate --strict -> replay --explain -> export replay fixture -> fix -> pack",
       "plugin_export_replay_fixture",
       "publish-check",
+      "dist/extension.js",
+      "runtime.kind = \"extensionHost\"",
+      "contributes.gatewayHooks",
+      "capabilities",
+      "api.gateway.registerHook",
       "gateway.request.beforeSend",
       "request.normalizedMessages",
       "configSchema",
@@ -78,32 +93,37 @@ const requiredDocs = [
       "example:response-guard",
       "示例是开发模板，不是默认可安装市场包",
     ],
+    forbiddenPhrases: [
+      "`declarativeRules` 是默认社区运行时",
+      "WASM 适合需要确定性代码逻辑的插件",
+      "pnpm plugin-wasm-sdk:test",
+      "最小声明式规则插件",
+    ],
   },
   {
     path: "docs/plugins/runtime/wasm.md",
     phrases: [
-      "WASM ABI v1",
+      "unsupported pre-release legacy runtime",
+      "not part of the public Plugin API v1 community runtime surface",
+      "community plugins must migrate to Extension Host",
+      "runtime.kind = \"extensionHost\"",
+    ],
+    forbiddenPhrases: [
       "WASM packages are installable only when host policy enables execution",
-      "PLUGIN_RUNTIME_DISABLED",
-      "WASM enablement is rejected while host policy disables execution",
-      "guest entrypoint",
-      "memory/time/filesystem/network 限制",
-      "no WASI filesystem imports",
-      "fuel-based termination",
-      "host only passes permission-trimmed JSON",
+      "WASM 只用于宿主策略启用后",
+      "插件作者应使用",
     ],
   },
   {
     path: "docs/plugins/runtime/process-poc.md",
     phrases: [
+      "unsupported pre-release legacy runtime",
+      "not part of the public Plugin API v1 community runtime surface",
+      "Extension Host",
       "JSON-RPC over stdio",
       "disabled by default",
-      "start timeout",
-      "hook timeout",
-      "crash isolation",
-      "idle recycle",
-      "no marketplace enablement by default",
     ],
+    forbiddenPhrases: ["服务于未来无法放进 WASM ABI"],
   },
   {
     path: "docs/plugins/developer-guide.md",
@@ -117,8 +137,8 @@ const requiredDocs = [
       "Claude 和 Codex request shapes",
       "@aio-coding-hub/plugin-sdk",
       "plugin.json",
-      "最小声明式规则插件",
-      "声明式规则",
+      "最小 Extension Host 插件",
+      "Extension Host",
     ],
   },
   {
@@ -128,23 +148,38 @@ const requiredDocs = [
       "PluginManifest",
       "validateManifest",
       "permissionRisk",
+      "Extension Host",
+      "runtime: { kind: \"extensionHost\"",
+      "api.gateway.registerHook",
       "SDK 边界",
     ],
+    forbiddenPhrases: ["aio-plugin-wasm-sdk", "runtime: { kind: \"declarativeRules\""],
   },
   {
     path: "docs/plugins/reference/declarative-rules.md",
     phrases: [
+      "unsupported pre-release legacy runtime",
       "declarativeRules",
-      "规则文件结构",
-      "request.body",
-      "log.message",
-      "appendMessage",
-      "运行时限制",
+      "migrate to Extension Host",
+      "contributes.gatewayHooks",
+      "api.gateway.registerHook",
+    ],
+    forbiddenPhrases: [
+      "`declarativeRules` 是社区插件当前优先使用的运行时",
+      "应使用 WASM 或未来的隔离进程运行时",
     ],
   },
   {
     path: "docs/plugins/examples/privacy-filter.md",
-    phrases: ["official.privacy-filter", "packyme/privacy-filter", "已移除的内置示例"],
+    phrases: [
+      "official.privacy-filter",
+      "packyme/privacy-filter",
+      "host-owned built-in",
+      "社区插件不能使用 `native:privacyFilter`",
+      "Extension Host",
+      "已移除的内置示例",
+    ],
+    forbiddenPhrases: ["社区示例应优先使用 `declarativeRules`"],
   },
   {
     path: "docs/plugins/examples/README.md",
@@ -165,9 +200,10 @@ const requiredDocs = [
     path: "docs/plugins/architecture/audit.md",
     phrases: [
       "official.privacy-filter",
-      "declarativeRules",
-      "WASM",
-      "native",
+      "Extension Host",
+      "gatewayHooks",
+      "protocolBridges",
+      "unsupported pre-release legacy runtime",
       "信任边界",
       "性能与稳定性建议",
       "0.62 does not add public provider plugin APIs",
@@ -176,7 +212,15 @@ const requiredDocs = [
   },
   {
     path: "docs/plugins/reference/manifest.md",
-    phrases: ["apiVersion", "hostCompatibility", "declarativeRules", "wasm"],
+    phrases: [
+      "apiVersion",
+      "hostCompatibility",
+      "runtime.kind = \"extensionHost\"",
+      "main",
+      "contributes.gatewayHooks",
+      "capabilities",
+    ],
+    forbiddenPhrases: ['{ "kind": "declarativeRules"', '{ "kind": "wasm"'],
   },
   {
     path: "docs/plugins/reference/hooks.md",
@@ -209,7 +253,8 @@ const requiredDocs = [
     phrases: [
       "fail-closed",
       "quarantined",
-      "no arbitrary JavaScript",
+      "Extension Host",
+      "不在 Rust 主进程或 Tauri WebView 执行第三方插件代码",
       "默认 vNext hook timeout: 150 ms",
     ],
   },
@@ -250,11 +295,12 @@ const requiredDocs = [
       "SemVer",
       "pluginApi",
       "platforms",
-      "WASM ABI",
       "Plugin API v1 remains externally compatible in 0.62",
       "0.62 does not add public provider plugin APIs",
-      "0.62 keeps third-party JavaScript and WebView plugin execution unsupported",
+      "Extension Host is the only community runtime",
+      "unsupported pre-release legacy runtime",
     ],
+    forbiddenPhrases: ['{ "kind": "wasm"', "社区插件继续使用 `declarativeRules`"],
   },
 ];
 
@@ -278,6 +324,12 @@ for (const doc of requiredDocs) {
   for (const phrase of doc.caseInsensitivePhrases ?? []) {
     if (!normalizedText.includes(phrase.toLowerCase())) {
       failures.push(`${doc.path}: missing required phrase "${phrase}"`);
+    }
+  }
+
+  for (const phrase of doc.forbiddenPhrases ?? []) {
+    if (text.includes(phrase)) {
+      failures.push(`${doc.path}: forbidden phrase "${phrase}"`);
     }
   }
 }

@@ -46,11 +46,7 @@ requireScript(
   "check:plugin-api-contract",
   "node scripts/check-plugin-api-contract.mjs"
 );
-requireScript(
-  rootPackage,
-  "plugin-wasm-sdk:test",
-  "cargo test --manifest-path packages/plugin-wasm-sdk/Cargo.toml && cargo test --manifest-path packages/plugin-wasm-sdk/examples/redactor/Cargo.toml"
-);
+requireScript(rootPackage, "create-aio-plugin:test", "pnpm --filter create-aio-plugin test");
 requireScript(rootPackage, "test:e2e", "vitest run src/e2e");
 
 const workspace = readText("pnpm-workspace.yaml");
@@ -58,35 +54,9 @@ if (!workspace.includes("packages/*")) {
   failures.push("pnpm-workspace.yaml: packages/* workspace is required");
 }
 
-const sdkCargo = readText("packages/plugin-wasm-sdk/Cargo.toml");
-for (const phrase of [
-  'name = "aio-plugin-wasm-sdk"',
-  "serde",
-  "serde_json",
-  "crate-type",
-]) {
-  if (!sdkCargo.includes(phrase)) {
-    failures.push(`packages/plugin-wasm-sdk/Cargo.toml: missing "${phrase}"`);
-  }
-}
-
-requireFile("packages/plugin-wasm-sdk/src/lib.rs");
-requireFile("packages/plugin-wasm-sdk/examples/redactor/Cargo.toml");
-requireFile("packages/plugin-wasm-sdk/examples/redactor/src/lib.rs");
-requireFile("packages/plugin-wasm-sdk/tests/sdk_contract.rs");
-
-const sdkLib = readText("packages/plugin-wasm-sdk/src/lib.rs");
-for (const phrase of [
-  "HookRequest",
-  "HookResult",
-  "PluginManifest",
-  "aio_plugin_entrypoint",
-  "serde",
-]) {
-  if (!sdkLib.includes(phrase)) {
-    failures.push(`packages/plugin-wasm-sdk/src/lib.rs: missing "${phrase}"`);
-  }
-}
+requireFile("packages/plugin-sdk/src/index.ts");
+requireFile("packages/create-aio-plugin/src/scaffold.ts");
+requireFile("packages/create-aio-plugin/src/devtools.ts");
 
 const ci = readText(".github/workflows/ci.yml");
 for (const phrase of [
@@ -94,8 +64,6 @@ for (const phrase of [
   "pnpm check:plugin-system-docs",
   "pnpm check:generated-bindings",
   "pnpm plugin-sdk:typecheck",
-  "cargo test --manifest-path packages/plugin-wasm-sdk/Cargo.toml",
-  "cargo test --manifest-path packages/plugin-wasm-sdk/examples/redactor/Cargo.toml",
   "pnpm create-aio-plugin:test",
   "pnpm test:e2e",
 ]) {
@@ -105,14 +73,46 @@ for (const phrase of [
 }
 
 const docs = [
+  "docs/plugin-manifest-v1.md",
   "docs/plugins/reference/sdk.md",
   "docs/plugins/developer-guide.md",
-  "docs/plugins/runtime/wasm.md",
+  "docs/plugins/runtime/README.md",
 ];
 for (const doc of docs) {
   const text = readText(doc);
-  if (!text.includes("plugin-wasm-sdk")) {
-    failures.push(`${doc}: must reference plugin-wasm-sdk`);
+  if (!text.includes("Extension Host")) {
+    failures.push(`${doc}: must reference Extension Host`);
+  }
+}
+
+for (const [doc, phrases] of Object.entries({
+  "docs/plugin-manifest-v1.md": [
+    "runtime.kind = \"extensionHost\"",
+    "`main` points at bundled JavaScript output",
+    "`contributes.gatewayHooks`",
+    "`capabilities: [\"gateway.hooks\"]`",
+    "`api.gateway.registerHook`",
+  ],
+  "docs/plugins/developer-guide.md": [
+    "Extension Host 是唯一 community runtime",
+    "`runtime.kind = \"extensionHost\"`",
+    "`main` 指向打包后的 JavaScript 输出",
+    "`contributes.gatewayHooks`",
+    "`api.gateway.registerHook`",
+  ],
+  "docs/plugins/plugin-api-v1-contract.json": [
+    "\"communityRuntimes\": [",
+    "\"extensionHost\"",
+    "\"unsupportedLegacyRuntimes\"",
+    "\"gatewayHooks\"",
+    "\"protocolBridges\"",
+  ],
+})) {
+  const text = readText(doc);
+  for (const phrase of phrases) {
+    if (!text.includes(phrase)) {
+      failures.push(`${doc}: missing "${phrase}"`);
+    }
   }
 }
 
@@ -122,16 +122,21 @@ for (const [doc, phrases] of Object.entries({
     "WASM 执行受宿主策略控制",
     "`plugin.wasm`",
   ],
-  "docs/plugins/runtime/wasm.md": [
-    "`declarativeRules` 是默认社区运行时",
-    "WASM 只用于宿主策略启用后",
-    "`plugin.wasm` artifacts 会由 `create-aio-plugin pack` 作为 binary files 打包",
+  "docs/plugin-manifest-v1.md": [
+    '"kind": "declarativeRules"',
+    '"kind": "wasm"',
+    '"gatewayRules"',
+  ],
+  "docs/plugins/plugin-api-v1-contract.json": [
+    '"communityRuntimes": ["declarativeRules"]',
+    '"policyGatedRuntimes"',
+    '"gatewayRules"',
   ],
 })) {
   const text = readText(doc);
   for (const phrase of phrases) {
-    if (!text.includes(phrase)) {
-      failures.push(`${doc}: missing "${phrase}"`);
+    if (text.includes(phrase)) {
+      failures.push(`${doc}: forbidden "${phrase}"`);
     }
   }
 }
