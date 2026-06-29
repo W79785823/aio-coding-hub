@@ -33,14 +33,6 @@ pub(crate) struct ExtractedPluginPackage {
     pub(crate) package_bytes: Vec<u8>,
 }
 
-pub(crate) fn extract_plugin_package(
-    package_path: &Path,
-    staging_dir: &Path,
-    limits: PluginPackageLimits,
-) -> AppResult<ExtractedPluginPackage> {
-    extract_plugin_package_with_mode(package_path, staging_dir, limits, true)
-}
-
 pub(crate) fn extract_plugin_package_for_inspection(
     package_path: &Path,
     staging_dir: &Path,
@@ -522,6 +514,14 @@ mod tests {
             zip.write_all(bytes).expect("write file");
         }
         zip.finish().expect("finish package");
+    }
+
+    fn extract_plugin_package(
+        package_path: &Path,
+        staging_dir: &Path,
+        limits: PluginPackageLimits,
+    ) -> AppResult<ExtractedPluginPackage> {
+        extract_plugin_package_with_mode(package_path, staging_dir, limits, true)
     }
 
     #[test]

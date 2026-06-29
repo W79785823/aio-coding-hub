@@ -3,39 +3,31 @@
 use crate::app::plugins::official_privacy_filter_runtime::OfficialPrivacyFilterRuntime;
 use crate::app::plugins::runtime_lifecycle::RuntimeLifecycleRegistry;
 use crate::app::plugins::runtime_manager::{PluginRuntimeManager, RuntimeDispatch};
-use crate::app::plugins::runtime_policy::RuntimePolicy;
 use crate::domain::plugins::PluginDetail;
 use crate::gateway::plugins::context::{GatewayHookResult, GatewayVisibleHookContext};
 use crate::gateway::plugins::permissions::GatewayPluginError;
 use crate::gateway::plugins::pipeline::{GatewayHookFuture, GatewayPluginExecutor};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct RuntimeExecutionPolicy {
-    pub(crate) wasm_enabled: bool,
-}
-
 pub(crate) struct RuntimeGatewayPluginExecutor {
     privacy_filter_runtime: Arc<OfficialPrivacyFilterRuntime>,
     lifecycle: RuntimeLifecycleRegistry,
-    policy: RuntimeExecutionPolicy,
 }
 
 impl RuntimeGatewayPluginExecutor {
-    pub(crate) fn new(policy: RuntimeExecutionPolicy) -> Self {
+    pub(crate) fn new() -> Self {
         let privacy_filter_runtime = Arc::new(OfficialPrivacyFilterRuntime::default());
         let lifecycle = RuntimeLifecycleRegistry::default();
         lifecycle.register_cache(privacy_filter_runtime.clone());
         Self {
             privacy_filter_runtime,
             lifecycle,
-            policy,
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn for_tests(policy: RuntimeExecutionPolicy) -> Self {
-        Self::new(policy)
+    pub(crate) fn for_tests() -> Self {
+        Self::new()
     }
 
     pub(crate) fn execute_plugin_sync(
@@ -43,10 +35,7 @@ impl RuntimeGatewayPluginExecutor {
         plugin: &PluginDetail,
         context: GatewayVisibleHookContext,
     ) -> Result<GatewayHookResult, GatewayPluginError> {
-        let manager = PluginRuntimeManager::new(RuntimePolicy {
-            wasm_enabled: self.policy.wasm_enabled,
-            process_enabled: false,
-        });
+        let manager = PluginRuntimeManager::new();
 
         match manager.runtime_dispatch(&plugin.summary.plugin_id, &plugin.manifest.runtime)? {
             RuntimeDispatch::NativePrivacyFilter => {
@@ -76,7 +65,7 @@ impl RuntimeGatewayPluginExecutor {
 
 impl Default for RuntimeGatewayPluginExecutor {
     fn default() -> Self {
-        Self::new(RuntimeExecutionPolicy::default())
+        Self::new()
     }
 }
 
@@ -151,9 +140,7 @@ mod tests {
 
     #[test]
     fn runtime_executor_rejects_non_official_privacy_filter_native_runtime() {
-        let executor = RuntimeGatewayPluginExecutor::for_tests(RuntimeExecutionPolicy {
-            wasm_enabled: false,
-        });
+        let executor = RuntimeGatewayPluginExecutor::for_tests();
         let plugin = plugin_detail(
             "example.privacy-filter",
             PluginRuntime::Native {
@@ -214,9 +201,7 @@ mod tests {
     }
 
     fn executor() -> RuntimeGatewayPluginExecutor {
-        RuntimeGatewayPluginExecutor::for_tests(RuntimeExecutionPolicy {
-            wasm_enabled: false,
-        })
+        RuntimeGatewayPluginExecutor::for_tests()
     }
 
     fn hook_context(hook_name: &str, trace_id: &str) -> GatewayVisibleHookContext {

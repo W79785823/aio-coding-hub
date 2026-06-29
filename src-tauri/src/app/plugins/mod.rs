@@ -12,5 +12,4 @@ pub(crate) mod runtime_cache;
 pub(crate) mod runtime_executor;
 pub(crate) mod runtime_lifecycle;
 pub(crate) mod runtime_manager;
-pub(crate) mod runtime_policy;
 pub(crate) mod wasm_runtime;

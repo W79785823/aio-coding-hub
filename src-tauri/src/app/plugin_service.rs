@@ -1053,8 +1053,10 @@ WHERE plugin_id = ?1 AND version = ?2
 
 fn diff_hooks(before: &PluginManifest, after: &PluginManifest) -> Vec<PluginLifecycleChange> {
     let mut changes = Vec::new();
-    for hook in &before.hooks {
-        match after.hooks.iter().find(|next| next.name == hook.name) {
+    let before_hooks = declared_gateway_hooks(before);
+    let after_hooks = declared_gateway_hooks(after);
+    for hook in &before_hooks {
+        match after_hooks.iter().find(|next| next.name == hook.name) {
             Some(next)
                 if next.priority != hook.priority || next.failure_policy != hook.failure_policy =>
             {
@@ -1082,8 +1084,8 @@ fn diff_hooks(before: &PluginManifest, after: &PluginManifest) -> Vec<PluginLife
             }),
         }
     }
-    for hook in &after.hooks {
-        if before.hooks.iter().all(|prev| prev.name != hook.name) {
+    for hook in &after_hooks {
+        if before_hooks.iter().all(|prev| prev.name != hook.name) {
             changes.push(PluginLifecycleChange {
                 name: hook.name.clone(),
                 change: "added".to_string(),
@@ -1427,7 +1429,7 @@ pub(crate) fn install_plugin_from_local_package_with_policy(
     let staging_root = cache_dir.join("staging");
     let staging_dir =
         staging_root.join(format!("local-{}", crate::shared::time::now_unix_seconds()));
-    let extracted = match package::extract_plugin_package(
+    let extracted = match package::extract_plugin_package_for_inspection(
         package_path,
         &staging_dir,
         package::PluginPackageLimits::default(),
@@ -1660,7 +1662,7 @@ pub(crate) fn update_plugin_from_local_package(
         "update-{}",
         crate::shared::time::now_unix_seconds()
     ));
-    let extracted = match package::extract_plugin_package(
+    let extracted = match package::extract_plugin_package_for_inspection(
         package_path,
         &staging_dir,
         package::PluginPackageLimits::default(),
@@ -1811,6 +1813,9 @@ fn enforce_unsigned_install_policy(
     policy: &LocalPackageInstallPolicy,
     trust: PackageTrust,
 ) -> AppResult<()> {
+    if matches!(manifest.runtime, PluginRuntime::ExtensionHost { .. }) {
+        return Ok(());
+    }
     if trust.signature_verified {
         return Ok(());
     }
@@ -1872,8 +1877,8 @@ fn validate_local_package_install(
     host_version: &str,
     policy: &LocalPackageInstallPolicy,
 ) -> AppResult<PackageTrust> {
-    validate_manifest(&extracted.manifest, host_version)?;
     validate_reserved_official_source(&extracted.manifest, policy.install_source)?;
+    validate_manifest(&extracted.manifest, host_version)?;
     let trust = verify_local_package(extracted, policy)?;
     enforce_unsigned_install_policy(&extracted.manifest, policy, trust)?;
     Ok(trust)
@@ -2076,6 +2081,10 @@ pub(crate) fn revoke_plugin_permission(
 }
 
 fn ensure_required_permissions_granted(detail: &PluginDetail) -> AppResult<()> {
+    if matches!(detail.manifest.runtime, PluginRuntime::ExtensionHost { .. }) {
+        return Ok(());
+    }
+
     let missing: Vec<&str> = detail
         .manifest
         .permissions
@@ -2654,7 +2663,7 @@ mod tests {
     }
 
     #[test]
-    fn service_requires_permissions_before_enable_and_preserves_config_on_disable() {
+    fn service_enables_extension_host_without_permission_grants_and_preserves_config_on_disable() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
 
@@ -2667,28 +2676,17 @@ mod tests {
         )
         .unwrap();
 
-        let err =
-            enable_plugin(&db, "community.prompt-helper", env!("CARGO_PKG_VERSION")).unwrap_err();
-        assert!(err.to_string().starts_with("PLUGIN_PERMISSION_REQUIRED:"));
-
         save_plugin_config(
             &db,
             "community.prompt-helper",
             serde_json::json!({"mode": "append_instruction"}),
         )
         .unwrap();
-        grant_plugin_permissions(
-            &db,
-            "community.prompt-helper",
-            vec![
-                "request.body.read".to_string(),
-                "request.body.write".to_string(),
-            ],
-        )
-        .unwrap();
         let enabled =
             enable_plugin(&db, "community.prompt-helper", env!("CARGO_PKG_VERSION")).unwrap();
         assert_eq!(enabled.summary.status, PluginStatus::Enabled);
+        assert!(enabled.granted_permissions.is_empty());
+        assert!(enabled.pending_permissions.is_empty());
 
         let disabled = disable_plugin(&db, "community.prompt-helper").unwrap();
         assert_eq!(disabled.summary.status, PluginStatus::Disabled);
@@ -2696,7 +2694,7 @@ mod tests {
     }
 
     #[test]
-    fn local_plugin_install_records_manifest_permissions_as_pending() {
+    fn local_plugin_install_records_no_pending_permissions_for_extension_host() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
 
@@ -2710,9 +2708,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(installed.granted_permissions, Vec::<String>::new());
+        assert!(installed.pending_permissions.is_empty());
         assert_eq!(
-            installed.pending_permissions,
-            vec!["request.body.read", "request.body.write"]
+            installed.manifest.capabilities,
+            vec!["gateway.hooks".to_string()]
         );
     }
 
@@ -2733,15 +2732,6 @@ mod tests {
             &db,
             "community.prompt-helper",
             serde_json::json!({"mode": "append_instruction"}),
-        )
-        .unwrap();
-        grant_plugin_permissions(
-            &db,
-            "community.prompt-helper",
-            vec![
-                "request.body.read".to_string(),
-                "request.body.write".to_string(),
-            ],
         )
         .unwrap();
         quarantine_revoked_plugin(&db, "community.prompt-helper", "revoked").unwrap();
@@ -2771,15 +2761,6 @@ mod tests {
             &db,
             "community.prompt-helper",
             serde_json::json!({"mode": "append_instruction"}),
-        )
-        .unwrap();
-        grant_plugin_permissions(
-            &db,
-            "community.prompt-helper",
-            vec![
-                "request.body.read".to_string(),
-                "request.body.write".to_string(),
-            ],
         )
         .unwrap();
         uninstall_plugin(&db, "community.prompt-helper").unwrap();
@@ -2823,32 +2804,27 @@ mod tests {
     }
 
     #[test]
-    fn revoke_plugin_permission_removes_grant_and_records_audit() {
+    fn revoke_official_plugin_permission_removes_grant_and_records_audit() {
         let dir = tempfile::tempdir().unwrap();
-        let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
+        let db = crate::db::init_for_tests(&dir.path().join("official-revoke.db")).unwrap();
+        let installed_root = dir.path().join("installed");
+        let official_root = crate::app::plugins::official::official_resource_root_for_tests();
 
-        install_plugin_manifest(
+        install_official_plugin(
             &db,
-            manifest(),
-            PluginInstallSource::Local,
-            None,
+            "official.privacy-filter",
+            &official_root,
             env!("CARGO_PKG_VERSION"),
-        )
-        .unwrap();
-        grant_plugin_permissions(
-            &db,
-            "community.prompt-helper",
-            vec![
-                "request.body.read".to_string(),
-                "request.body.write".to_string(),
-            ],
+            &installed_root,
         )
         .unwrap();
 
         let detail =
-            revoke_plugin_permission(&db, "community.prompt-helper", "request.body.write").unwrap();
+            revoke_plugin_permission(&db, "official.privacy-filter", "log.redact").unwrap();
 
-        assert_eq!(detail.granted_permissions, vec!["request.body.read"]);
+        assert!(!detail
+            .granted_permissions
+            .contains(&"log.redact".to_string()));
         assert!(detail
             .audit_logs
             .iter()
@@ -2945,15 +2921,6 @@ DROP TABLE plugins;
             PluginInstallSource::Local,
             None,
             env!("CARGO_PKG_VERSION"),
-        )
-        .unwrap();
-        grant_plugin_permissions(
-            &db,
-            "community.prompt-helper",
-            vec![
-                "request.body.read".to_string(),
-                "request.body.write".to_string(),
-            ],
         )
         .unwrap();
         save_plugin_config(
@@ -3626,13 +3593,14 @@ DROP TABLE plugins;
     }
 
     #[test]
-    fn plugin_local_install_preview_blocks_unsigned_high_risk_with_default_policy() {
+    fn plugin_local_install_preview_does_not_apply_legacy_permission_block_to_extension_host() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
-        let package_path = dir.path().join("preview-risky.aio-plugin");
-        let mut manifest = local_package_manifest("local.preview-risky", "1.0.0");
-        manifest["permissions"] = serde_json::json!(["request.body.read"]);
-        write_local_package(&package_path, manifest);
+        let package_path = dir.path().join("preview-extension-host.aio-plugin");
+        write_local_package(
+            &package_path,
+            local_package_manifest("local.preview-extension-host", "1.0.0"),
+        );
 
         let preview = preview_plugin_from_local_package_with_policy(
             &db,
@@ -3643,11 +3611,12 @@ DROP TABLE plugins;
         )
         .unwrap();
 
-        assert!(preview.blocking_reasons.iter().any(|notice| {
-            notice.code == "PLUGIN_UNSIGNED_HIGH_RISK_PERMISSION"
-                && notice.message.contains("request.body.read")
-        }));
-        assert!(repository::get_plugin(&db, "local.preview-risky").is_err());
+        assert!(preview
+            .blocking_reasons
+            .iter()
+            .all(|notice| notice.code != "PLUGIN_UNSIGNED_HIGH_RISK_PERMISSION"));
+        assert!(preview.permissions.is_empty());
+        assert!(repository::get_plugin(&db, "local.preview-extension-host").is_err());
     }
 
     #[test]
@@ -3954,7 +3923,7 @@ DROP TABLE plugins;
     }
 
     #[test]
-    fn plugin_local_update_preview_reports_permission_runtime_hook_and_config_changes() {
+    fn plugin_local_update_preview_reports_gateway_hook_and_config_changes() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
         let cache_dir = dir.path().join("plugins/cache");
@@ -3974,12 +3943,11 @@ DROP TABLE plugins;
             },
         )
         .unwrap();
-        grant_plugin_permissions(&db, "local.diff", vec!["request.meta.read".to_string()]).unwrap();
 
         let v2_package = dir.path().join("diff-v2.aio-plugin");
         let mut v2_manifest = local_package_manifest("local.diff", "1.1.0");
         v2_manifest["configVersion"] = serde_json::json!(2);
-        v2_manifest["hooks"] = serde_json::json!([
+        v2_manifest["contributes"]["gatewayHooks"] = serde_json::json!([
             {
                 "name": "gateway.request.afterBodyRead",
                 "priority": 10,
@@ -3991,8 +3959,6 @@ DROP TABLE plugins;
                 "failurePolicy": "fail-open"
             }
         ]);
-        v2_manifest["permissions"] =
-            serde_json::json!(["request.meta.read", "request.header.read"]);
         write_local_package(&v2_package, v2_manifest);
 
         let diff = preview_plugin_update_from_local_package(
@@ -4018,11 +3984,11 @@ DROP TABLE plugins;
             .hook_changes
             .iter()
             .any(|change| change.name == "gateway.request.beforeSend" && change.change == "added"));
-        assert!(diff.permission_changes.iter().any(|change| {
-            change.permission == "request.meta.read" && change.change == "unchanged_granted"
-        }));
-        assert!(diff.permission_changes.iter().any(|change| {
-            change.permission == "request.header.read" && change.change == "added_pending"
+        assert!(diff.permission_changes.is_empty());
+        assert!(diff.contribution_changes.iter().any(|change| {
+            change.kind == "gatewayHook"
+                && change.name == "gateway.request.beforeSend"
+                && change.change == "added"
         }));
         assert!(diff.blocking_reasons.is_empty());
     }
@@ -4414,13 +4380,14 @@ DROP TABLE plugins;
     }
 
     #[test]
-    fn plugin_signature_verification_allows_high_risk_signed_local_install() {
+    fn plugin_signature_verification_records_signed_local_install() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
-        let package_path = dir.path().join("signed-risky.aio-plugin");
-        let mut manifest = local_package_manifest("local.signed-risky", "1.0.0");
-        manifest["permissions"] = serde_json::json!(["request.body.read"]);
-        write_local_package(&package_path, manifest);
+        let package_path = dir.path().join("signed-extension.aio-plugin");
+        write_local_package(
+            &package_path,
+            local_package_manifest("local.signed-extension", "1.0.0"),
+        );
         let (expected_checksum, mut policy) = signed_package_policy(&package_path, 8);
         policy.expected_checksum = Some(expected_checksum);
 
@@ -4434,7 +4401,7 @@ DROP TABLE plugins;
         )
         .unwrap();
 
-        assert_eq!(detail.summary.plugin_id, "local.signed-risky");
+        assert_eq!(detail.summary.plugin_id, "local.signed-extension");
         let install_audit = detail
             .audit_logs
             .iter()
@@ -4444,13 +4411,14 @@ DROP TABLE plugins;
     }
 
     #[test]
-    fn plugin_local_package_install_records_manifest_permissions_as_pending() {
+    fn plugin_local_package_install_records_no_pending_permissions_for_extension_host() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
-        let package_path = dir.path().join("signed-pending-permissions.aio-plugin");
-        let mut manifest = local_package_manifest("local.pending-permissions", "1.0.0");
-        manifest["permissions"] = serde_json::json!(["request.body.read", "request.body.write"]);
-        write_local_package(&package_path, manifest);
+        let package_path = dir.path().join("signed-extension-host.aio-plugin");
+        write_local_package(
+            &package_path,
+            local_package_manifest("local.extension-host", "1.0.0"),
+        );
         let (expected_checksum, mut policy) = signed_package_policy(&package_path, 9);
         policy.expected_checksum = Some(expected_checksum);
 
@@ -4465,9 +4433,10 @@ DROP TABLE plugins;
         .unwrap();
 
         assert_eq!(detail.granted_permissions, Vec::<String>::new());
+        assert!(detail.pending_permissions.is_empty());
         assert_eq!(
-            detail.pending_permissions,
-            vec!["request.body.read", "request.body.write"]
+            detail.manifest.capabilities,
+            vec!["gateway.hooks".to_string()]
         );
     }
 
@@ -4630,10 +4599,11 @@ DROP TABLE plugins;
     fn plugin_remote_install_uses_trusted_market_source_public_key() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
-        let package_path = dir.path().join("market-signed-risky.aio-plugin");
-        let mut manifest = local_package_manifest("market.signed-risky", "1.0.0");
-        manifest["permissions"] = serde_json::json!(["request.body.read"]);
-        write_local_package(&package_path, manifest);
+        let package_path = dir.path().join("market-signed-extension.aio-plugin");
+        write_local_package(
+            &package_path,
+            local_package_manifest("market.signed-extension", "1.0.0"),
+        );
         let package_bytes = std::fs::read(&package_path).unwrap();
         let (expected_checksum, trusted_policy) = signed_package_policy(&package_path, 9);
         let trusted_public_key = trusted_policy.public_key.clone().unwrap();
@@ -4671,7 +4641,7 @@ INSERT INTO plugin_market_sources(
             env!("CARGO_PKG_VERSION"),
             RemotePackageInstallPolicy {
                 install_source: PluginInstallSource::Market,
-                expected_plugin_id: "market.signed-risky".to_string(),
+                expected_plugin_id: "market.signed-extension".to_string(),
                 expected_checksum,
                 signature: trusted_policy.signature,
                 public_key: Some(caller_public_key),
@@ -4680,10 +4650,10 @@ INSERT INTO plugin_market_sources(
         )
         .unwrap();
 
-        assert_eq!(detail.summary.plugin_id, "market.signed-risky");
+        assert_eq!(detail.summary.plugin_id, "market.signed-extension");
         assert_eq!(detail.install_source, PluginInstallSource::Market);
         assert_eq!(detail.granted_permissions, Vec::<String>::new());
-        assert_eq!(detail.pending_permissions, vec!["request.body.read"]);
+        assert!(detail.pending_permissions.is_empty());
         let install_audit = detail
             .audit_logs
             .iter()
@@ -4703,9 +4673,10 @@ INSERT INTO plugin_market_sources(
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
         let package_path = dir.path().join("market-cdn-signed.aio-plugin");
-        let mut manifest = local_package_manifest("market.cdn-signed", "1.0.0");
-        manifest["permissions"] = serde_json::json!(["request.body.read"]);
-        write_local_package(&package_path, manifest);
+        write_local_package(
+            &package_path,
+            local_package_manifest("market.cdn-signed", "1.0.0"),
+        );
         let package_bytes = std::fs::read(&package_path).unwrap();
         let (expected_checksum, trusted_policy) = signed_package_policy(&package_path, 19);
         let trusted_public_key = trusted_policy.public_key.clone().unwrap();
@@ -4804,15 +4775,16 @@ INSERT INTO plugin_market_sources(
     }
 
     #[test]
-    fn plugin_unsigned_offline_install_rejects_high_risk_permissions_by_default() {
+    fn plugin_unsigned_offline_install_allows_extension_host_without_legacy_permissions() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
-        let package_path = dir.path().join("unsigned-risky.aio-plugin");
-        let mut manifest = local_package_manifest("local.risky", "1.0.0");
-        manifest["permissions"] = serde_json::json!(["request.header.readSensitive"]);
-        write_local_package(&package_path, manifest);
+        let package_path = dir.path().join("unsigned-extension.aio-plugin");
+        write_local_package(
+            &package_path,
+            local_package_manifest("local.unsigned-extension", "1.0.0"),
+        );
 
-        let err = install_plugin_from_local_package_with_policy(
+        let detail = install_plugin_from_local_package_with_policy(
             &db,
             &package_path,
             &dir.path().join("plugins/cache"),
@@ -4824,12 +4796,14 @@ INSERT INTO plugin_market_sources(
                 ..LocalPackageInstallPolicy::default()
             },
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(err
-            .to_string()
-            .starts_with("PLUGIN_UNSIGNED_HIGH_RISK_PERMISSION:"));
-        assert!(repository::get_plugin(&db, "local.risky").is_err());
+        assert_eq!(detail.summary.plugin_id, "local.unsigned-extension");
+        assert!(detail.pending_permissions.is_empty());
+        assert!(detail
+            .audit_logs
+            .iter()
+            .any(|log| log.details["unsigned"] == true));
     }
 
     #[test]
@@ -4864,7 +4838,7 @@ INSERT INTO plugin_market_sources(
     }
 
     #[test]
-    fn plugin_update_rollback_marks_new_permissions_pending_and_keeps_existing_config() {
+    fn plugin_update_keeps_existing_config_without_legacy_permission_state() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
         let cache_dir = dir.path().join("plugins/cache");
@@ -4888,18 +4862,12 @@ INSERT INTO plugin_market_sources(
         )
         .unwrap();
         save_plugin_config(&db, "local.updatable", serde_json::json!({"enabled": true})).unwrap();
-        grant_plugin_permissions(
-            &db,
-            "local.updatable",
-            vec!["request.meta.read".to_string()],
-        )
-        .unwrap();
 
         let v2_package = dir.path().join("plugin-v2.aio-plugin");
-        let mut v2_manifest = local_package_manifest("local.updatable", "1.1.0");
-        v2_manifest["permissions"] =
-            serde_json::json!(["request.meta.read", "request.header.read"]);
-        write_local_package(&v2_package, v2_manifest);
+        write_local_package(
+            &v2_package,
+            local_package_manifest("local.updatable", "1.1.0"),
+        );
 
         let updated = update_plugin_from_local_package(
             &db,
@@ -4917,8 +4885,8 @@ INSERT INTO plugin_market_sources(
 
         assert_eq!(updated.summary.current_version.as_deref(), Some("1.1.0"));
         assert_eq!(updated.config["enabled"], true);
-        assert_eq!(updated.granted_permissions, vec!["request.meta.read"]);
-        assert_eq!(updated.pending_permissions, vec!["request.header.read"]);
+        assert!(updated.granted_permissions.is_empty());
+        assert!(updated.pending_permissions.is_empty());
     }
 
     #[test]
@@ -5086,7 +5054,7 @@ INSERT INTO plugin_market_sources(
     }
 
     #[test]
-    fn plugin_update_rollback_reconciles_permissions_and_config_version() {
+    fn plugin_update_rollback_reconciles_config_version_without_legacy_permission_state() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
         let cache_dir = dir.path().join("plugins/cache");
@@ -5096,13 +5064,10 @@ INSERT INTO plugin_market_sources(
 
         let mut v1_manifest = local_package_manifest("local.rollback-state", "1.0.0");
         v1_manifest["configVersion"] = serde_json::json!(1);
-        v1_manifest["permissions"] = serde_json::json!(["request.meta.read"]);
         write_local_package(&v1_package, v1_manifest);
 
         let mut v2_manifest = local_package_manifest("local.rollback-state", "1.1.0");
         v2_manifest["configVersion"] = serde_json::json!(2);
-        v2_manifest["permissions"] =
-            serde_json::json!(["request.meta.read", "request.header.read"]);
         write_local_package(&v2_package, v2_manifest);
 
         install_plugin_from_local_package_with_policy(
@@ -5124,12 +5089,6 @@ INSERT INTO plugin_market_sources(
             serde_json::json!({"enabled": true, "extra": "kept"}),
         )
         .unwrap();
-        grant_plugin_permissions(
-            &db,
-            "local.rollback-state",
-            vec!["request.meta.read".to_string()],
-        )
-        .unwrap();
 
         let updated = update_plugin_from_local_package(
             &db,
@@ -5144,7 +5103,7 @@ INSERT INTO plugin_market_sources(
             },
         )
         .unwrap();
-        assert_eq!(updated.pending_permissions, vec!["request.header.read"]);
+        assert!(updated.pending_permissions.is_empty());
 
         let rolled_back = rollback_plugin_to_version(&db, "local.rollback-state", "1.0.0").unwrap();
 
@@ -5152,7 +5111,7 @@ INSERT INTO plugin_market_sources(
             rolled_back.summary.current_version.as_deref(),
             Some("1.0.0")
         );
-        assert_eq!(rolled_back.granted_permissions, vec!["request.meta.read"]);
+        assert!(rolled_back.granted_permissions.is_empty());
         assert!(rolled_back.pending_permissions.is_empty());
         assert_eq!(rolled_back.config["enabled"], true);
         assert_eq!(

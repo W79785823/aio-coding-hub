@@ -1,6 +1,5 @@
 //! Usage: Runtime policy facade for plugin runtime execution.
 
-use crate::app::plugins::runtime_policy::RuntimePolicy;
 use crate::domain::plugins::PluginRuntime;
 use crate::gateway::plugins::permissions::GatewayPluginError;
 
@@ -10,26 +9,16 @@ pub(crate) enum RuntimeDispatch {
     ExtensionHost,
 }
 
-pub(crate) struct PluginRuntimeManager {
-    policy: RuntimePolicy,
-}
+pub(crate) struct PluginRuntimeManager;
 
 impl PluginRuntimeManager {
-    pub(crate) fn new(policy: RuntimePolicy) -> Self {
-        Self { policy }
+    pub(crate) fn new() -> Self {
+        Self
     }
 
     #[cfg(test)]
-    pub(crate) fn for_tests(policy: RuntimePolicy) -> Self {
-        Self::new(policy)
-    }
-
-    pub(crate) fn validate_runtime_policy(
-        &self,
-        _runtime: &PluginRuntime,
-    ) -> Result<(), GatewayPluginError> {
-        let _wasm_enabled = self.policy.wasm_enabled;
-        Ok(())
+    pub(crate) fn for_tests() -> Self {
+        Self::new()
     }
 
     pub(crate) fn runtime_dispatch(
@@ -37,11 +26,6 @@ impl PluginRuntimeManager {
         plugin_id: &str,
         runtime: &PluginRuntime,
     ) -> Result<RuntimeDispatch, GatewayPluginError> {
-        self.validate_runtime_policy(runtime)?;
-        // Reserved for future process runtime policy. Plugin API v1 has no
-        // process runtime variant, so this flag is intentionally not decisive yet.
-        let _process_enabled = self.policy.process_enabled;
-
         match runtime {
             PluginRuntime::ExtensionHost { .. } => Ok(RuntimeDispatch::ExtensionHost),
             PluginRuntime::Native { engine }
@@ -60,12 +44,11 @@ impl PluginRuntimeManager {
 #[cfg(test)]
 mod tests {
     use super::{PluginRuntimeManager, RuntimeDispatch};
-    use crate::app::plugins::runtime_policy::RuntimePolicy;
     use crate::domain::plugins::PluginRuntime;
 
     #[test]
     fn runtime_manager_rejects_non_extension_host_community_runtime() {
-        let manager = PluginRuntimeManager::for_tests(RuntimePolicy::default());
+        let manager = PluginRuntimeManager::for_tests();
         let runtime = PluginRuntime::Native {
             engine: "privacyFilter".to_string(),
         };
@@ -79,7 +62,7 @@ mod tests {
 
     #[test]
     fn runtime_manager_rejects_non_official_native_privacy_filter() {
-        let manager = PluginRuntimeManager::for_tests(RuntimePolicy::default());
+        let manager = PluginRuntimeManager::for_tests();
         let runtime = PluginRuntime::Native {
             engine: "privacyFilter".to_string(),
         };
@@ -97,7 +80,7 @@ mod tests {
 
     #[test]
     fn runtime_manager_returns_extension_host_dispatch() {
-        let manager = PluginRuntimeManager::for_tests(RuntimePolicy::default());
+        let manager = PluginRuntimeManager::for_tests();
         let runtime = PluginRuntime::ExtensionHost {
             language: "typescript".to_string(),
         };
