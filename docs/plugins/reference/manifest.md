@@ -56,6 +56,8 @@ Capability dependency table：
 | `gatewayHooks` | `gateway.hooks` |
 | `protocolBridges` | `protocol.bridge` |
 
+Protocol bridge MVP skeleton 只稳定 `protocolBridges` manifest 声明、`protocol.bridge` capability dependency 和安装预检展示。完整协议互换执行链仍属于 future host integration；插件不能只靠声明 bridge 就接管 OpenAI、Gemini 或 Claude 协议转换。
+
 `providers.card.badges` 和 `providers.card.actions` 是已命名 UI slots，但当前 SDK/Rust validation 不为它们强制 `provider.extensionValues` dependency。
 
 `hostCompatibility` 必须包含 `app` 和 `pluginApi`；`platforms` 可以限制支持的操作系统。

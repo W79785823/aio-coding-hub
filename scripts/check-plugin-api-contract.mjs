@@ -239,6 +239,23 @@ if (contract) {
       requiredCapabilities
     );
   }
+  const protocolBridgeContribution = requireObject(
+    `${contractPath}.protocolBridgeContribution`,
+    contract.protocolBridgeContribution
+  );
+  if (protocolBridgeContribution) {
+    if (protocolBridgeContribution.status !== "mvp-skeleton") {
+      failures.push(`${contractPath}.protocolBridgeContribution.status must be mvp-skeleton`);
+    }
+    if (
+      typeof protocolBridgeContribution.executionBoundary !== "string" ||
+      !protocolBridgeContribution.executionBoundary.includes("future host integration")
+    ) {
+      failures.push(
+        `${contractPath}.protocolBridgeContribution.executionBoundary must describe future host integration`
+      );
+    }
+  }
 
   const matrix = requireObject(`${contractPath}.hookMatrix`, contract.hookMatrix) ?? {};
   for (const hook of contract.activeHooks ?? []) {

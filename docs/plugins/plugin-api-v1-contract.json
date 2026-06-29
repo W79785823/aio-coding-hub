@@ -79,7 +79,9 @@
   },
   "protocolBridgeContribution": {
     "requiredFields": ["bridgeType", "inboundProtocol", "outboundProtocol"],
-    "optionalFields": ["supportsStreaming"]
+    "optionalFields": ["supportsStreaming"],
+    "status": "mvp-skeleton",
+    "executionBoundary": "manifest declaration, capability dependency, and install preview only; full protocol bridge execution is future host integration"
   },
   "commandContribution": {
     "requiredFields": ["command", "title"],

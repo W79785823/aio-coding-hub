@@ -71,7 +71,7 @@ export const FEATURED_PLUGIN_CATALOG: PluginFeaturedCatalogItem[] = [
   {
     pluginId: "examples/redactor",
     name: "Redactor",
-    summary: "示例：用声明式规则对请求和日志做脱敏。",
+    summary: "示例：发送前清理敏感内容，日志保存前同步脱敏。",
     category: "privacy",
     source: "example",
     riskLabels: ["读取请求内容", "修改请求内容", "日志脱敏"],

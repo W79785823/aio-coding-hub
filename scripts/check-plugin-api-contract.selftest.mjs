@@ -48,6 +48,14 @@ function withContractDefaults(value) {
       ["gatewayHooks", "protocolBridges", "commands"],
       value.contributionPoints
     ),
+    protocolBridgeContribution: {
+      requiredFields: ["bridgeType", "inboundProtocol", "outboundProtocol"],
+      optionalFields: ["supportsStreaming"],
+      status: "mvp-skeleton",
+      executionBoundary:
+        "manifest declaration, capability dependency, and install preview only; full protocol bridge execution is future host integration",
+      ...(value.protocolBridgeContribution ?? {}),
+    },
   };
 }
 
@@ -402,6 +410,69 @@ const extensionHostDependencyBaselineResult = runCheck(extensionHostDependencyBa
 if (extensionHostDependencyBaselineResult.status !== 0) {
   throw new Error(
     `expected Extension Host dependency baseline to pass, got status ${extensionHostDependencyBaselineResult.status}\n${extensionHostDependencyBaselineResult.stderr}`
+  );
+}
+
+const protocolBridgeBoundaryDriftRoot = makeRoot("protocol-bridge-boundary-drift");
+writeJson(protocolBridgeBoundaryDriftRoot, "docs/plugins/plugin-api-v1-contract.json", {
+  apiVersion: "1.0.0",
+  defaultHookTimeoutMs: 150,
+  defaultFailurePolicy: "fail-open",
+  activeHooks: [
+    "gateway.request.afterBodyRead",
+    "gateway.request.beforeSend",
+    "gateway.response.chunk",
+  ],
+  reservedHooks: ["gateway.response.headers"],
+  activeMutationFields: ["requestBody", "streamChunk"],
+  configSchemaTypes: ["object"],
+  activePermissions: [
+    "request.meta.read",
+    "request.header.read",
+    "request.header.readSensitive",
+    "request.body.read",
+    "request.body.write",
+    "stream.inspect",
+    "stream.modify",
+  ],
+  reservedPermissions: ["network.fetch"],
+  capabilityDependencies: {
+    commands: ["commands.execute"],
+    providers: ["provider.extensionValues"],
+    "ui.providers.editor.sections": ["provider.extensionValues"],
+    "ui.providers.editor.fields": ["provider.extensionValues"],
+    "ui.buttonCommandFields": ["commands.execute"],
+    gatewayHooks: ["gateway.hooks"],
+    protocolBridges: ["protocol.bridge"],
+  },
+  protocolBridgeContribution: {
+    status: "active-execution",
+    executionBoundary: "protocol bridge execution is fully active",
+  },
+  hookMatrix: JSON.parse(
+    readFileSync(
+      join(extensionHostDependencyBaselineRoot, "docs/plugins/plugin-api-v1-contract.json"),
+      "utf8"
+    )
+  ).hookMatrix,
+  communityRuntimes: ["extensionHost"],
+  unsupportedLegacyRuntimes: ["declarativeRules", "wasm", "process", "native"],
+  officialRuntimes: ["native:privacyFilter"],
+});
+writePassingScaffold(protocolBridgeBoundaryDriftRoot);
+
+const protocolBridgeBoundaryDriftResult = runCheck(protocolBridgeBoundaryDriftRoot);
+if (
+  protocolBridgeBoundaryDriftResult.status === 0 ||
+  !protocolBridgeBoundaryDriftResult.stderr.includes(
+    "protocolBridgeContribution.status must be mvp-skeleton"
+  ) ||
+  !protocolBridgeBoundaryDriftResult.stderr.includes(
+    "protocolBridgeContribution.executionBoundary must describe future host integration"
+  )
+) {
+  throw new Error(
+    `expected protocol bridge boundary drift failure, got status ${protocolBridgeBoundaryDriftResult.status}\n${protocolBridgeBoundaryDriftResult.stderr}`
   );
 }
 
