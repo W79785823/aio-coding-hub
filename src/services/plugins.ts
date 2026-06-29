@@ -5,6 +5,7 @@ import {
   type JsonValue,
   type PluginAuditLog,
   type PluginDetail,
+  type PluginExtensionExecutionReport,
   type PluginHookExecutionReport,
   type PluginInstallPreview,
   type PluginInstallSource,
@@ -23,6 +24,7 @@ export type {
   JsonValue,
   PluginAuditLog,
   PluginDetail,
+  PluginExtensionExecutionReport,
   PluginHookExecutionReport,
   PluginInstallPreview,
   PluginInstallSource,
@@ -351,6 +353,51 @@ export async function pluginListRuntimeReports(input: {
     cmd: "plugin_list_runtime_reports",
     args: { pluginId, hookName, traceId, limit },
     invoke: async () => commands.pluginListRuntimeReports({ pluginId, hookName, traceId, limit }),
+  });
+}
+
+export async function pluginListExtensionRuntimeReports(input: {
+  pluginId?: string | null;
+  contributionType?: "command" | "hook" | null;
+  contributionId?: string | null;
+  traceId?: string | null;
+  limit?: number | null;
+}) {
+  const pluginId = input.pluginId == null ? null : normalizePluginId(input.pluginId);
+  const contributionType =
+    input.contributionType == null
+      ? null
+      : normalizeRequiredText("contributionType", input.contributionType);
+  const contributionId =
+    input.contributionId == null
+      ? null
+      : normalizeRequiredText("contributionId", input.contributionId);
+  const traceId = input.traceId == null ? null : normalizeRequiredText("traceId", input.traceId);
+  const limit = clampRuntimeReportLimit(input.limit);
+
+  return invokeGeneratedIpc<PluginExtensionExecutionReport[]>({
+    title: "读取插件运行报告失败",
+    cmd: "plugin_list_extension_runtime_reports",
+    args: { pluginId, contributionType, contributionId, traceId, limit },
+    invoke: async () =>
+      commands.pluginListExtensionRuntimeReports({
+        pluginId,
+        contributionType,
+        contributionId,
+        traceId,
+        limit,
+      }),
+  });
+}
+
+export async function pluginExecuteCommand(command: string, args: JsonValue = null) {
+  const normalizedCommand = normalizeRequiredText("command", command);
+
+  return invokeGeneratedIpc<JsonValue>({
+    title: "执行插件命令失败",
+    cmd: "plugin_execute_command",
+    args: { command: normalizedCommand, args },
+    invoke: async () => commands.pluginExecuteCommand({ command: normalizedCommand, args }),
   });
 }
 

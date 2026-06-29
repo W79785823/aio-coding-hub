@@ -4,10 +4,14 @@ import { Copy, Download } from "lucide-react";
 import { toast } from "sonner";
 import {
   usePluginExportReplayFixtureMutation,
-  usePluginRuntimeReportsQuery,
+  usePluginExtensionRuntimeReportsQuery,
 } from "../../query/plugins";
 import { copyText } from "../../services/clipboard";
-import type { JsonValue, PluginDetail, PluginHookExecutionReport } from "../../services/plugins";
+import type {
+  JsonValue,
+  PluginDetail,
+  PluginExtensionExecutionReport,
+} from "../../services/plugins";
 import { Button } from "../../ui/Button";
 import { formatActionFailureToast } from "../../utils/errors";
 
@@ -61,12 +65,12 @@ function TraceIdButton({ traceId }: { traceId: string | null | undefined }) {
   );
 }
 
-function reportFailureLabel(report: PluginHookExecutionReport) {
-  return report.failure_kind ?? report.error_code ?? "-";
+function reportFailureLabel(report: PluginExtensionExecutionReport) {
+  return report.failureKind ?? report.errorCode ?? "-";
 }
 
 export function PluginRuntimeReportsPanel({ detail }: { detail: PluginDetail }) {
-  const reportsQuery = usePluginRuntimeReportsQuery({
+  const reportsQuery = usePluginExtensionRuntimeReportsQuery({
     pluginId: detail.summary.plugin_id,
     limit: 8,
   });
@@ -80,13 +84,13 @@ export function PluginRuntimeReportsPanel({ detail }: { detail: PluginDetail }) 
     auditLogs.length === 0 &&
     !reportsQuery.isLoading;
 
-  async function handleExportReplayFixture(report: PluginHookExecutionReport) {
-    if (!report.trace_id) return;
+  async function handleExportReplayFixture(report: PluginExtensionExecutionReport) {
+    if (!report.traceId || report.contributionType !== "hook") return;
     try {
       const fixture = await replayExportMutation.mutateAsync({
-        traceId: report.trace_id,
-        hookName: report.hook_name,
-        pluginId: report.plugin_id,
+        traceId: report.traceId,
+        hookName: report.contributionId,
+        pluginId: report.pluginId,
       });
       await copyText(JSON.stringify(fixture, null, 2));
       toast.success("Replay fixture 已复制");
@@ -114,19 +118,19 @@ export function PluginRuntimeReportsPanel({ detail }: { detail: PluginDetail }) 
               <div className="flex flex-wrap items-start justify-between gap-2 text-sm">
                 <span className="font-medium text-foreground">{report.status}</span>
                 <span className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground">
-                  {report.runtime_kind}
+                  {report.contributionType}
                 </span>
               </div>
               <div className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-4">
                 <div>
-                  <div>Hook</div>
-                  <div className="break-words font-mono text-foreground">{report.hook_name}</div>
+                  <div>{report.contributionType === "command" ? "命令" : "Hook"}</div>
+                  <div className="break-words font-mono text-foreground">
+                    {report.commandOrHook ?? report.contributionId}
+                  </div>
                 </div>
                 <div>
                   <div>耗时</div>
-                  <div className="break-words font-mono text-foreground">
-                    {report.duration_ms}ms
-                  </div>
+                  <div className="break-words font-mono text-foreground">{report.durationMs}ms</div>
                 </div>
                 <div>
                   <div>Failure</div>
@@ -136,26 +140,23 @@ export function PluginRuntimeReportsPanel({ detail }: { detail: PluginDetail }) 
                 </div>
                 <div>
                   <div>Trace ID</div>
-                  <TraceIdButton traceId={report.trace_id} />
+                  <TraceIdButton traceId={report.traceId} />
                 </div>
               </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={!report.trace_id || replayExportMutation.isPending}
-                  onClick={() => void handleExportReplayFixture(report)}
-                  title={report.replay_export_reason ?? "导出 replay fixture"}
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  导出 Replay
-                </Button>
-                {report.replay_export_reason ? (
-                  <span className="text-xs text-muted-foreground">
-                    {report.replay_export_reason}
-                  </span>
-                ) : null}
-              </div>
+              {report.contributionType === "hook" ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={!report.traceId || replayExportMutation.isPending}
+                    onClick={() => void handleExportReplayFixture(report)}
+                    title="导出 replay fixture"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    导出 Replay
+                  </Button>
+                </div>
+              ) : null}
             </div>
           ))}
 

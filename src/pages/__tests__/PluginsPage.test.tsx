@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { PluginsPage } from "../PluginsPage";
 import type {
   PluginDetail,
-  PluginHookExecutionReport,
+  PluginExtensionExecutionReport,
   PluginInstallPreview,
   PluginReplayFixture,
   PluginSummary,
@@ -27,10 +27,10 @@ import {
   usePluginPreviewFromFileMutation,
   usePluginPreviewUpdateFromFileMutation,
   usePluginExportReplayFixtureMutation,
+  usePluginExtensionRuntimeReportsQuery,
   usePluginQuery,
   usePluginRollbackMutation,
   usePluginSaveConfigMutation,
-  usePluginRuntimeReportsQuery,
   usePluginUpdateFromFileMutation,
   usePluginsListQuery,
   usePluginUninstallMutation,
@@ -82,6 +82,7 @@ vi.mock("../../query/plugins", async () => {
     usePluginPreviewFromFileMutation: vi.fn(),
     usePluginPreviewUpdateFromFileMutation: vi.fn(),
     usePluginExportReplayFixtureMutation: vi.fn(),
+    usePluginExtensionRuntimeReportsQuery: vi.fn(),
     usePluginUpdateFromFileMutation: vi.fn(),
     usePluginRollbackMutation: vi.fn(),
     usePluginEnableMutation: vi.fn(),
@@ -89,7 +90,6 @@ vi.mock("../../query/plugins", async () => {
     usePluginDisableMutation: vi.fn(),
     usePluginUninstallMutation: vi.fn(),
     usePluginSaveConfigMutation: vi.fn(),
-    usePluginRuntimeReportsQuery: vi.fn(),
   };
 });
 
@@ -288,27 +288,25 @@ function updateDiff(overrides: Partial<PluginUpdateDiff> = {}): PluginUpdateDiff
 }
 
 function runtimeReport(
-  overrides: Partial<PluginHookExecutionReport> = {}
-): PluginHookExecutionReport {
+  overrides: Partial<PluginExtensionExecutionReport> = {}
+): PluginExtensionExecutionReport {
   return {
     id: 1,
-    plugin_id: "community.prompt-helper",
-    trace_id: "trace-report-1",
-    hook_name: "gateway.request.afterBodyRead",
-    runtime_kind: "declarativeRules",
+    pluginId: "community.prompt-helper",
+    traceId: "trace-report-1",
+    contributionType: "hook",
+    contributionId: "gateway.request.afterBodyRead",
+    commandOrHook: "gateway.request.afterBodyRead",
     status: "completed",
-    started_at_ms: 1000,
-    duration_ms: 9,
-    failure_kind: null,
-    error_code: null,
-    failure_policy: "fail-open",
-    circuit_state: "closed",
-    context_budget: {},
-    output_budget: {},
-    mutation_summary: { changed: true, field: "requestBody" },
+    startedAtMs: 1000,
+    durationMs: 9,
+    failureKind: null,
+    errorCode: null,
+    inputBudget: {},
+    outputBudget: {},
+    mutationSummary: { changed: true, field: "requestBody" },
     replayable: true,
-    replay_export_reason: null,
-    created_at: 10,
+    createdAt: 10,
     ...overrides,
   };
 }
@@ -406,7 +404,7 @@ describe("pages/PluginsPage", () => {
     vi.mocked(usePluginExportReplayFixtureMutation).mockReturnValue(
       mutation({ mutateAsync: vi.fn().mockResolvedValue(replayFixture()) }) as any
     );
-    vi.mocked(usePluginRuntimeReportsQuery).mockReturnValue({
+    vi.mocked(usePluginExtensionRuntimeReportsQuery).mockReturnValue({
       data: [],
       isLoading: false,
       isFetching: false,
@@ -574,7 +572,7 @@ describe("pages/PluginsPage", () => {
       isFetching: false,
       error: null,
     } as any);
-    vi.mocked(usePluginRuntimeReportsQuery).mockReturnValue({
+    vi.mocked(usePluginExtensionRuntimeReportsQuery).mockReturnValue({
       data: [runtimeReport()],
       isLoading: false,
       isFetching: false,
@@ -587,7 +585,7 @@ describe("pages/PluginsPage", () => {
     renderWithProviders(<PluginsPage />);
 
     expect(screen.getByText("completed")).toBeInTheDocument();
-    expect(screen.getByText("declarativeRules")).toBeInTheDocument();
+    expect(screen.getByText("hook")).toBeInTheDocument();
     expect(screen.getByText("9ms")).toBeInTheDocument();
     expect(screen.getByText("trace-report-1")).toBeInTheDocument();
 
@@ -992,11 +990,11 @@ describe("pages/PluginsPage", () => {
       isFetching: false,
       error: null,
     } as any);
-    vi.mocked(usePluginRuntimeReportsQuery).mockReturnValue({
+    vi.mocked(usePluginExtensionRuntimeReportsQuery).mockReturnValue({
       data: [
         runtimeReport({
-          trace_id: "trace-report-1",
-          duration_ms: 17,
+          traceId: "trace-report-1",
+          durationMs: 17,
           status: "completed",
         }),
       ],

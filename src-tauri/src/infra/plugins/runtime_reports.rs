@@ -1,7 +1,7 @@
 //! Usage: Structured plugin hook execution report persistence.
 
 use crate::db;
-use crate::domain::plugins::PluginHookExecutionReport;
+use crate::domain::plugins::{PluginExtensionExecutionReport, PluginHookExecutionReport};
 use crate::shared::error::{db_err, AppResult};
 use crate::shared::time::now_unix_seconds;
 use rusqlite::{params, params_from_iter, types::Value};
@@ -30,12 +30,68 @@ pub(crate) struct RecordPluginHookExecutionReportInput {
     pub(crate) replay_export_reason: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RecordPluginExtensionExecutionReportInput {
+    pub(crate) plugin_id: String,
+    pub(crate) contribution_type: String,
+    pub(crate) contribution_id: String,
+    pub(crate) command_or_hook: Option<String>,
+    pub(crate) trace_id: Option<String>,
+    pub(crate) status: String,
+    pub(crate) started_at_ms: i64,
+    pub(crate) duration_ms: i64,
+    pub(crate) failure_kind: Option<String>,
+    pub(crate) error_code: Option<String>,
+    pub(crate) input_budget: serde_json::Value,
+    pub(crate) output_budget: serde_json::Value,
+    pub(crate) mutation_summary: serde_json::Value,
+    pub(crate) replayable: bool,
+}
+
 pub(crate) fn record_hook_execution_report(
     db: &db::Db,
     input: RecordPluginHookExecutionReportInput,
 ) -> AppResult<PluginHookExecutionReport> {
     let conn = db.open_connection()?;
     record_hook_execution_report_with_conn(&conn, input)
+}
+
+pub(crate) fn record_extension_execution_report(
+    db: &db::Db,
+    input: RecordPluginExtensionExecutionReportInput,
+) -> AppResult<PluginExtensionExecutionReport> {
+    let contribution_type = normalize_contribution_type(&input.contribution_type)?;
+    let contribution_id = input.contribution_id.clone();
+    let command_or_hook = input
+        .command_or_hook
+        .clone()
+        .unwrap_or_else(|| contribution_id.clone());
+    let report = record_hook_execution_report(
+        db,
+        RecordPluginHookExecutionReportInput {
+            plugin_id: input.plugin_id,
+            trace_id: input.trace_id,
+            hook_name: contribution_id,
+            runtime_kind: runtime_kind_for_contribution_type(contribution_type).to_string(),
+            status: input.status,
+            started_at_ms: input.started_at_ms,
+            duration_ms: input.duration_ms,
+            failure_kind: input.failure_kind,
+            error_code: input.error_code,
+            failure_policy: None,
+            circuit_state: None,
+            context_budget_json: input.input_budget,
+            output_budget_json: input.output_budget,
+            mutation_summary_json: input.mutation_summary,
+            replayable: input.replayable,
+            replay_export_reason: None,
+        },
+    )?;
+    Ok(extension_execution_report_from_hook_report(
+        report,
+        contribution_type,
+        Some(command_or_hook),
+    ))
 }
 
 fn record_hook_execution_report_with_conn(
@@ -234,6 +290,95 @@ FROM plugin_hook_execution_reports
     Ok(out)
 }
 
+pub(crate) fn list_extension_execution_reports(
+    db: &db::Db,
+    plugin_id: Option<&str>,
+    contribution_type: Option<&str>,
+    contribution_id: Option<&str>,
+    trace_id: Option<&str>,
+    limit: usize,
+) -> AppResult<Vec<PluginExtensionExecutionReport>> {
+    let conn = db.open_connection()?;
+    let limit = limit.clamp(1, 500) as i64;
+    let contribution_type = contribution_type
+        .map(normalize_contribution_type)
+        .transpose()?;
+
+    let mut sql = String::from(
+        r#"
+SELECT
+  id,
+  plugin_id,
+  trace_id,
+  hook_name,
+  runtime_kind,
+  status,
+  started_at_ms,
+  duration_ms,
+  failure_kind,
+  error_code,
+  context_budget_json,
+  output_budget_json,
+  mutation_summary_json,
+  replayable,
+  created_at
+FROM plugin_hook_execution_reports
+"#,
+    );
+    let mut conditions = Vec::new();
+    if plugin_id.is_some() {
+        conditions.push("plugin_id = ?");
+    }
+    if let Some(contribution_type) = contribution_type {
+        match contribution_type {
+            "command" => conditions.push("runtime_kind = 'extensionHost'"),
+            "hook" => conditions.push("runtime_kind <> 'extensionHost'"),
+            _ => unreachable!("contribution type already normalized"),
+        }
+    }
+    if contribution_id.is_some() {
+        conditions.push("hook_name = ?");
+    }
+    if trace_id.is_some() {
+        conditions.push("trace_id = ?");
+    }
+    if !conditions.is_empty() {
+        sql.push_str("WHERE ");
+        sql.push_str(&conditions.join(" AND "));
+        sql.push('\n');
+    }
+    sql.push_str("ORDER BY created_at DESC, id DESC\nLIMIT ?");
+
+    let mut stmt = conn
+        .prepare_cached(&sql)
+        .map_err(|e| db_err!("failed to prepare plugin extension execution report query: {e}"))?;
+    let mut values = Vec::new();
+    if let Some(plugin_id) = plugin_id {
+        values.push(Value::Text(plugin_id.to_string()));
+    }
+    if let Some(contribution_id) = contribution_id {
+        values.push(Value::Text(contribution_id.to_string()));
+    }
+    if let Some(trace_id) = trace_id {
+        values.push(Value::Text(trace_id.to_string()));
+    }
+    values.push(Value::Integer(limit));
+
+    let rows = stmt
+        .query_map(
+            params_from_iter(values),
+            extension_execution_report_from_row,
+        )
+        .map_err(|e| db_err!("failed to query plugin extension execution reports: {e}"))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(
+            row.map_err(|e| db_err!("failed to read plugin extension execution report: {e}"))?,
+        );
+    }
+    Ok(out)
+}
+
 fn get_hook_execution_report_by_id(
     conn: &rusqlite::Connection,
     id: i64,
@@ -268,6 +413,25 @@ WHERE id = ?1
     .map_err(|e| db_err!("failed to query inserted plugin hook execution report: {e}"))
 }
 
+fn normalize_contribution_type(raw: &str) -> AppResult<&'static str> {
+    match raw.trim() {
+        "command" => Ok("command"),
+        "hook" => Ok("hook"),
+        other => Err(format!(
+            "PLUGIN_RUNTIME_REPORT_INVALID: unsupported contribution type: {other}"
+        )
+        .into()),
+    }
+}
+
+fn runtime_kind_for_contribution_type(contribution_type: &str) -> &'static str {
+    match contribution_type {
+        "command" => "extensionHost",
+        "hook" => "declarativeRules",
+        _ => "extension",
+    }
+}
+
 fn hook_execution_report_from_row(
     row: &rusqlite::Row<'_>,
 ) -> Result<PluginHookExecutionReport, rusqlite::Error> {
@@ -295,6 +459,65 @@ fn hook_execution_report_from_row(
         replay_export_reason: row.get("replay_export_reason")?,
         created_at: row.get("created_at")?,
     })
+}
+
+fn extension_execution_report_from_row(
+    row: &rusqlite::Row<'_>,
+) -> Result<PluginExtensionExecutionReport, rusqlite::Error> {
+    let context_budget_json: String = row.get("context_budget_json")?;
+    let output_budget_json: String = row.get("output_budget_json")?;
+    let mutation_summary_json: String = row.get("mutation_summary_json")?;
+    let replayable: i64 = row.get("replayable")?;
+    let runtime_kind: String = row.get("runtime_kind")?;
+    let contribution_id: String = row.get("hook_name")?;
+    let contribution_type = if runtime_kind == "extensionHost" {
+        "command"
+    } else {
+        "hook"
+    };
+    Ok(PluginExtensionExecutionReport {
+        id: row.get("id")?,
+        plugin_id: row.get("plugin_id")?,
+        contribution_type: contribution_type.to_string(),
+        contribution_id: contribution_id.clone(),
+        command_or_hook: Some(contribution_id),
+        trace_id: row.get("trace_id")?,
+        status: row.get("status")?,
+        started_at_ms: row.get("started_at_ms")?,
+        duration_ms: row.get("duration_ms")?,
+        failure_kind: row.get("failure_kind")?,
+        error_code: row.get("error_code")?,
+        input_budget: parse_json_value(&context_budget_json),
+        output_budget: parse_json_value(&output_budget_json),
+        mutation_summary: parse_json_value(&mutation_summary_json),
+        replayable: replayable != 0,
+        created_at: row.get("created_at")?,
+    })
+}
+
+fn extension_execution_report_from_hook_report(
+    report: PluginHookExecutionReport,
+    contribution_type: &str,
+    command_or_hook: Option<String>,
+) -> PluginExtensionExecutionReport {
+    PluginExtensionExecutionReport {
+        id: report.id,
+        plugin_id: report.plugin_id,
+        contribution_type: contribution_type.to_string(),
+        contribution_id: report.hook_name.clone(),
+        command_or_hook,
+        trace_id: report.trace_id,
+        status: report.status,
+        started_at_ms: report.started_at_ms,
+        duration_ms: report.duration_ms,
+        failure_kind: report.failure_kind,
+        error_code: report.error_code,
+        input_budget: report.context_budget,
+        output_budget: report.output_budget,
+        mutation_summary: report.mutation_summary,
+        replayable: report.replayable,
+        created_at: report.created_at,
+    }
 }
 
 fn parse_json_value(raw: &str) -> serde_json::Value {

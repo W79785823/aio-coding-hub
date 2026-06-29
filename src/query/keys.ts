@@ -252,6 +252,23 @@ export const pluginKeys = {
     traceId: string | null,
     limit: number | null
   ) => [...pluginsAllKey, "runtimeReports", pluginId, hookName, traceId, limit] as const,
+  extensionRuntimeReportsRoot: () => [...pluginsAllKey, "extensionRuntimeReports"] as const,
+  extensionRuntimeReports: (
+    pluginId: string | null,
+    contributionType: string | null,
+    contributionId: string | null,
+    traceId: string | null,
+    limit: number | null
+  ) =>
+    [
+      ...pluginsAllKey,
+      "extensionRuntimeReports",
+      pluginId,
+      contributionType,
+      contributionId,
+      traceId,
+      limit,
+    ] as const,
   replayFixture: (traceId: string | null, hookName: string | null, pluginId: string | null) =>
     [...pluginsAllKey, "replayFixture", traceId, hookName, pluginId] as const,
 };

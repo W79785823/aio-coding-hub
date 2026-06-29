@@ -4,8 +4,8 @@ use crate::app::plugin_service;
 use crate::app::plugins::contribution_registry::ActiveContributionSnapshot;
 use crate::app_state::{ensure_db_ready, DbInitState};
 use crate::domain::plugins::{
-    PluginAuditLog, PluginDetail, PluginHookExecutionReport, PluginInstallPreview,
-    PluginInstallSource, PluginReplayFixture, PluginUpdateDiff,
+    PluginAuditLog, PluginDetail, PluginExtensionExecutionReport, PluginHookExecutionReport,
+    PluginInstallPreview, PluginInstallSource, PluginReplayFixture, PluginUpdateDiff,
 };
 use crate::infra::plugins::market::PluginMarketListing;
 use crate::{blocking, plugins};
@@ -76,10 +76,27 @@ pub(crate) struct PluginListRuntimeReportsInput {
 
 #[derive(Debug, Clone, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct PluginListExtensionRuntimeReportsInput {
+    pub plugin_id: Option<String>,
+    pub contribution_type: Option<String>,
+    pub contribution_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct PluginExportReplayFixtureInput {
     pub trace_id: String,
     pub hook_name: String,
     pub plugin_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PluginExecuteCommandInput {
+    pub command: String,
+    pub args: serde_json::Value,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, specta::Type)]
@@ -187,6 +204,19 @@ pub(crate) async fn plugin_active_contributions(
     })
     .await
     .map_err(Into::into)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn plugin_execute_command(
+    app: tauri::AppHandle,
+    db_state: tauri::State<'_, DbInitState>,
+    input: PluginExecuteCommandInput,
+) -> Result<serde_json::Value, String> {
+    let db = ensure_db_ready(app, db_state.inner()).await?;
+    plugin_service::execute_plugin_command(&db, &input.command, input.args)
+        .await
+        .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -613,6 +643,28 @@ pub(crate) async fn plugin_list_runtime_reports(
             &db,
             input.plugin_id.as_deref(),
             input.hook_name.as_deref(),
+            input.trace_id.as_deref(),
+            input.limit.unwrap_or(50),
+        )
+    })
+    .await
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn plugin_list_extension_runtime_reports(
+    app: tauri::AppHandle,
+    db_state: tauri::State<'_, DbInitState>,
+    input: PluginListExtensionRuntimeReportsInput,
+) -> Result<Vec<PluginExtensionExecutionReport>, String> {
+    let db = ensure_db_ready(app, db_state.inner()).await?;
+    blocking::run("plugin_list_extension_runtime_reports", move || {
+        crate::infra::plugins::runtime_reports::list_extension_execution_reports(
+            &db,
+            input.plugin_id.as_deref(),
+            input.contribution_type.as_deref(),
+            input.contribution_id.as_deref(),
             input.trace_id.as_deref(),
             input.limit.unwrap_or(50),
         )

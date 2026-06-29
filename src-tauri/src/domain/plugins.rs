@@ -272,6 +272,27 @@ pub struct PluginHookExecutionReport {
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct PluginExtensionExecutionReport {
+    pub id: i64,
+    pub plugin_id: String,
+    pub contribution_type: String,
+    pub contribution_id: String,
+    pub command_or_hook: Option<String>,
+    pub trace_id: Option<String>,
+    pub status: String,
+    pub started_at_ms: i64,
+    pub duration_ms: i64,
+    pub failure_kind: Option<String>,
+    pub error_code: Option<String>,
+    pub input_budget: serde_json::Value,
+    pub output_budget: serde_json::Value,
+    pub mutation_summary: serde_json::Value,
+    pub replayable: bool,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginReplayFixture {
     pub schema_version: u32,
     pub trace_id: String,

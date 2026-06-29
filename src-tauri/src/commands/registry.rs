@@ -167,6 +167,7 @@ macro_rules! generated_command_registry {
             plugin_list => crate::commands::plugins::plugin_list,
             plugin_get => crate::commands::plugins::plugin_get,
             plugin_active_contributions => crate::commands::plugins::plugin_active_contributions,
+            plugin_execute_command => crate::commands::plugins::plugin_execute_command,
             plugin_preview_from_file => crate::commands::plugins::plugin_preview_from_file,
             plugin_preview_update_from_file => crate::commands::plugins::plugin_preview_update_from_file,
             plugin_install_from_file => crate::commands::plugins::plugin_install_from_file,
@@ -184,6 +185,7 @@ macro_rules! generated_command_registry {
             plugin_revoke_permission => crate::commands::plugins::plugin_revoke_permission,
             plugin_list_audit_logs => crate::commands::plugins::plugin_list_audit_logs,
             plugin_list_runtime_reports => crate::commands::plugins::plugin_list_runtime_reports,
+            plugin_list_extension_runtime_reports => crate::commands::plugins::plugin_list_extension_runtime_reports,
             plugin_export_replay_fixture => crate::commands::plugins::plugin_export_replay_fixture,
             // ── request_logs ──
             request_logs_list => crate::commands::request_logs::request_logs_list,

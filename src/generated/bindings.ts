@@ -1436,6 +1436,14 @@ export const commands = {
       else return { status: "error", error: e as any };
     }
   },
+  async pluginExecuteCommand(input: PluginExecuteCommandInput): Promise<Result<JsonValue, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("plugin_execute_command", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
   async pluginPreviewFromFile(
     input: PluginPreviewFromFileInput
   ): Promise<Result<PluginInstallPreview, string>> {
@@ -1590,6 +1598,19 @@ export const commands = {
   ): Promise<Result<PluginHookExecutionReport[], string>> {
     try {
       return { status: "ok", data: await TAURI_INVOKE("plugin_list_runtime_reports", { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async pluginListExtensionRuntimeReports(
+    input: PluginListExtensionRuntimeReportsInput
+  ): Promise<Result<PluginExtensionExecutionReport[], string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("plugin_list_extension_runtime_reports", { input }),
+      };
     } catch (e) {
       if (e instanceof Error) throw e;
       else return { status: "error", error: e as any };
@@ -2875,10 +2896,29 @@ export type PluginDetail = {
   runtime_failures: PluginRuntimeFailure[];
   rollback_versions: string[];
 };
+export type PluginExecuteCommandInput = { command: string; args: JsonValue };
 export type PluginExportReplayFixtureInput = {
   traceId: string;
   hookName: string;
   pluginId: string | null;
+};
+export type PluginExtensionExecutionReport = {
+  id: number;
+  pluginId: string;
+  contributionType: string;
+  contributionId: string;
+  commandOrHook: string | null;
+  traceId: string | null;
+  status: string;
+  startedAtMs: number;
+  durationMs: number;
+  failureKind: string | null;
+  errorCode: string | null;
+  inputBudget: JsonValue;
+  outputBudget: JsonValue;
+  mutationSummary: JsonValue;
+  replayable: boolean;
+  createdAt: number;
 };
 export type PluginGetInput = { pluginId: string };
 export type PluginGrantPermissionsInput = { pluginId: string; permissions: string[] };
@@ -2950,6 +2990,13 @@ export type PluginLifecycleChange = {
 };
 export type PluginLifecycleNotice = { severity: string; code: string; message: string };
 export type PluginListAuditLogsInput = { pluginId: string | null; limit: number | null };
+export type PluginListExtensionRuntimeReportsInput = {
+  pluginId: string | null;
+  contributionType: string | null;
+  contributionId: string | null;
+  traceId: string | null;
+  limit: number | null;
+};
 export type PluginListRuntimeReportsInput = {
   pluginId: string | null;
   hookName: string | null;

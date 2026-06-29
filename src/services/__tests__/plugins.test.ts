@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { commands } from "../../generated/bindings";
 import {
   type PluginDetail,
+  pluginExecuteCommand,
   pluginDisable,
   pluginEnable,
   pluginGet,
@@ -11,6 +12,7 @@ import {
   pluginInstallOfficial,
   pluginList,
   pluginListAuditLogs,
+  pluginListExtensionRuntimeReports,
   pluginListRuntimeReports,
   pluginParseMarketIndex,
   pluginExportReplayFixture,
@@ -40,7 +42,9 @@ vi.mock("../../generated/bindings", () => ({
     pluginGrantPermissions: vi.fn(),
     pluginRevokePermission: vi.fn(),
     pluginListAuditLogs: vi.fn(),
+    pluginListExtensionRuntimeReports: vi.fn(),
     pluginListRuntimeReports: vi.fn(),
+    pluginExecuteCommand: vi.fn(),
     pluginExportReplayFixture: vi.fn(),
   },
 }));
@@ -125,7 +129,15 @@ describe("services/plugins", () => {
     vi.mocked(commands.pluginGrantPermissions).mockResolvedValue({ status: "ok", data: detail });
     vi.mocked(commands.pluginRevokePermission).mockResolvedValue({ status: "ok", data: detail });
     vi.mocked(commands.pluginListAuditLogs).mockResolvedValue({ status: "ok", data: [] });
+    vi.mocked(commands.pluginListExtensionRuntimeReports).mockResolvedValue({
+      status: "ok",
+      data: [],
+    });
     vi.mocked(commands.pluginListRuntimeReports).mockResolvedValue({ status: "ok", data: [] });
+    vi.mocked(commands.pluginExecuteCommand).mockResolvedValue({
+      status: "ok",
+      data: { ok: true },
+    });
     vi.mocked(commands.pluginExportReplayFixture).mockResolvedValue({
       status: "ok",
       data: {
@@ -206,6 +218,16 @@ describe("services/plugins", () => {
       traceId: " trace-replay-1 ",
       limit: 9999,
     });
+    await pluginListExtensionRuntimeReports({
+      pluginId: " community.prompt-helper ",
+      contributionType: "hook",
+      contributionId: " gateway.request.afterBodyRead ",
+      traceId: " trace-replay-1 ",
+      limit: 9999,
+    });
+    await pluginExecuteCommand(" community.prompt-helper.open ", {
+      pluginId: "community.prompt-helper",
+    });
     await pluginExportReplayFixture({
       pluginId: " community.prompt-helper ",
       hookName: " gateway.request.afterBodyRead ",
@@ -267,6 +289,17 @@ describe("services/plugins", () => {
       traceId: "trace-replay-1",
       limit: 500,
     });
+    expect(commands.pluginListExtensionRuntimeReports).toHaveBeenCalledWith({
+      pluginId: "community.prompt-helper",
+      contributionType: "hook",
+      contributionId: "gateway.request.afterBodyRead",
+      traceId: "trace-replay-1",
+      limit: 500,
+    });
+    expect(commands.pluginExecuteCommand).toHaveBeenCalledWith({
+      command: "community.prompt-helper.open",
+      args: { pluginId: "community.prompt-helper" },
+    });
     expect(commands.pluginExportReplayFixture).toHaveBeenCalledWith({
       pluginId: "community.prompt-helper",
       hookName: "gateway.request.afterBodyRead",
@@ -276,6 +309,7 @@ describe("services/plugins", () => {
 
   it("rejects empty plugin ids and file paths before IPC", async () => {
     await expect(pluginGet(" ")).rejects.toThrow("SEC_INVALID_INPUT");
+    await expect(pluginExecuteCommand(" ")).rejects.toThrow("SEC_INVALID_INPUT");
     await expect(pluginInstallFromFile(" ")).rejects.toThrow("SEC_INVALID_INPUT");
     await expect(pluginInstallOfficial(" ")).rejects.toThrow("SEC_INVALID_INPUT");
     await expect(
@@ -286,6 +320,7 @@ describe("services/plugins", () => {
       })
     ).rejects.toThrow("SEC_INVALID_INPUT");
     expect(commands.pluginGet).not.toHaveBeenCalled();
+    expect(commands.pluginExecuteCommand).not.toHaveBeenCalled();
     expect(commands.pluginInstallFromFile).not.toHaveBeenCalled();
     expect(commands.pluginInstallOfficial).not.toHaveBeenCalled();
     expect(commands.pluginInstallRemote).not.toHaveBeenCalled();

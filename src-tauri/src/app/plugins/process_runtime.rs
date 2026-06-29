@@ -3,13 +3,14 @@
 
 use crate::shared::error::{AppError, AppResult};
 use serde_json::{json, Value as JsonValue};
+use std::fmt;
 use std::io::ErrorKind;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
-#[derive(Debug, Clone)]
 pub(crate) struct ProcessRuntimeConfig {
     pub(crate) program: String,
     pub(crate) args: Vec<String>,
@@ -19,6 +20,23 @@ pub(crate) struct ProcessRuntimeConfig {
     pub(crate) max_line_bytes: usize,
     pub(crate) ready_method: String,
     pub(crate) allow_startup_noise: bool,
+    pub(crate) host_handler: Option<Arc<dyn JsonRpcHostMethodHandler>>,
+}
+
+impl fmt::Debug for ProcessRuntimeConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProcessRuntimeConfig")
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field("start_timeout", &self.start_timeout)
+            .field("hook_timeout", &self.hook_timeout)
+            .field("idle_recycle", &self.idle_recycle)
+            .field("max_line_bytes", &self.max_line_bytes)
+            .field("ready_method", &self.ready_method)
+            .field("allow_startup_noise", &self.allow_startup_noise)
+            .field("host_handler", &self.host_handler.is_some())
+            .finish()
+    }
 }
 
 impl Default for ProcessRuntimeConfig {
@@ -32,8 +50,13 @@ impl Default for ProcessRuntimeConfig {
             max_line_bytes: 256 * 1024,
             ready_method: "plugin.ready".to_string(),
             allow_startup_noise: false,
+            host_handler: None,
         }
     }
+}
+
+pub(crate) trait JsonRpcHostMethodHandler: Send + Sync + 'static {
+    fn handle_host_method(&self, method: &str, params: JsonValue) -> AppResult<JsonValue>;
 }
 
 #[derive(Debug)]
@@ -154,7 +177,7 @@ impl JsonRpcProcessRuntime {
         let hook_timeout = self.config.hook_timeout;
         let result = tokio::time::timeout(hook_timeout, async {
             self.write_line(&line).await?;
-            let response = self.read_json_line().await?;
+            let response = self.read_response_for_request(id).await?;
             validate_json_rpc_response(id, response)
         })
         .await;
@@ -274,6 +297,81 @@ impl JsonRpcProcessRuntime {
                 ),
             ));
         }
+    }
+
+    async fn read_response_for_request(&mut self, expected_id: u64) -> AppResult<JsonValue> {
+        loop {
+            let response = self.read_json_line().await?;
+            if response.get("id").and_then(|value| value.as_u64()) == Some(expected_id) {
+                return Ok(response);
+            }
+            if response.get("method").and_then(|value| value.as_str()) == Some("host.call") {
+                let id = response.get("id").cloned().unwrap_or(JsonValue::Null);
+                let result = self.handle_host_call(response);
+                let message = match result {
+                    Ok(value) => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": value,
+                    }),
+                    Err(error) => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {
+                            "code": -32000,
+                            "message": error.to_string(),
+                            "data": { "code": error.code() },
+                        },
+                    }),
+                };
+                let bytes = serde_json::to_vec(&message).map_err(|err| {
+                    AppError::new(
+                        "PLUGIN_PROCESS_ENCODE_FAILED",
+                        format!("failed to encode host JSON-RPC response: {err}"),
+                    )
+                })?;
+                if bytes.len() + 1 > self.config.max_line_bytes {
+                    return Err(AppError::new(
+                        "PLUGIN_PROCESS_RESPONSE_TOO_LARGE",
+                        format!(
+                            "host JSON-RPC response exceeded {} bytes",
+                            self.config.max_line_bytes
+                        ),
+                    ));
+                }
+                self.write_line(&bytes).await?;
+                continue;
+            }
+            return Err(AppError::new(
+                "PLUGIN_PROCESS_PROTOCOL_ERROR",
+                "process plugin sent an unexpected JSON-RPC message",
+            ));
+        }
+    }
+
+    fn handle_host_call(&self, request: JsonValue) -> AppResult<JsonValue> {
+        let method = request
+            .get("params")
+            .and_then(|params| params.get("method"))
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| {
+                AppError::new(
+                    "PLUGIN_PROCESS_INVALID_HOST_CALL",
+                    "host.call requires params.method",
+                )
+            })?;
+        let params = request
+            .get("params")
+            .and_then(|params| params.get("params"))
+            .cloned()
+            .unwrap_or(JsonValue::Null);
+        let handler = self.config.host_handler.as_ref().ok_or_else(|| {
+            AppError::new(
+                "PLUGIN_PROCESS_HOST_CALL_UNAVAILABLE",
+                format!("host method is not available: {method}"),
+            )
+        })?;
+        handler.handle_host_method(method, params)
     }
 
     async fn read_line_string(&mut self) -> AppResult<String> {
@@ -449,6 +547,17 @@ mod tests {
     use serde_json::json;
     use std::time::Duration;
 
+    struct EchoHostHandler;
+
+    impl JsonRpcHostMethodHandler for EchoHostHandler {
+        fn handle_host_method(&self, method: &str, params: JsonValue) -> AppResult<JsonValue> {
+            Ok(json!({
+                "method": method,
+                "params": params,
+            }))
+        }
+    }
+
     fn write_node_plugin(script: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("plugin.js");
@@ -466,6 +575,7 @@ mod tests {
             max_line_bytes: 256 * 1024,
             ready_method: "plugin.ready".to_string(),
             allow_startup_noise: false,
+            host_handler: None,
         }
     }
 
@@ -504,6 +614,67 @@ mod tests {
         assert_eq!(
             response,
             json!({"action": "pass", "hook": "gateway.request.afterBodyRead"})
+        );
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn plugin_process_runtime_handles_host_call_before_final_response() {
+        let (_dir, script) = write_node_plugin(
+            r#"
+            console.log(JSON.stringify({jsonrpc:"2.0", method:"plugin.ready"}));
+            process.stdin.setEncoding("utf8");
+            let buffer = "";
+            let pendingRequest = null;
+            process.stdin.on("data", chunk => {
+              buffer += chunk;
+              const lines = buffer.split("\n");
+              buffer = lines.pop();
+              for (const line of lines) {
+                if (!line.trim()) continue;
+                const req = JSON.parse(line);
+                if (pendingRequest && req.id === 99) {
+                  console.log(JSON.stringify({
+                    jsonrpc: "2.0",
+                    id: pendingRequest.id,
+                    result: { host: req.result }
+                  }));
+                  pendingRequest = null;
+                  continue;
+                }
+                pendingRequest = req;
+                console.log(JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: 99,
+                  method: "host.call",
+                  params: { method: "echo", params: req.params }
+                }));
+              }
+            });
+            "#,
+        );
+        let mut config = node_config(&script);
+        config.host_handler = Some(Arc::new(EchoHostHandler));
+        let mut runtime = JsonRpcProcessRuntime::start(config)
+            .await
+            .expect("start process runtime");
+
+        let response = runtime
+            .call_method(
+                "plugin.handleHook",
+                json!({ "hook": "gateway.request.afterBodyRead" }),
+            )
+            .await
+            .expect("host call response");
+
+        assert_eq!(
+            response,
+            json!({
+                "host": {
+                    "method": "echo",
+                    "params": { "hook": "gateway.request.afterBodyRead" }
+                }
+            })
         );
         runtime.shutdown().await;
     }

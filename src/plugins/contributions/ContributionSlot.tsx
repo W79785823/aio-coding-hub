@@ -1,6 +1,14 @@
+import { toast } from "sonner";
+import { usePluginExecuteCommandMutation } from "../../query/plugins";
+import { formatActionFailureToast } from "../../utils/errors";
 import { HostRenderedContribution } from "./HostRenderedContribution";
 import { useContributionsForSlot } from "./useActiveContributions";
-import { contributionKey, type ContributionSlotProps } from "./types";
+import {
+  contributionKey,
+  type ContributionCommandHandler,
+  type ContributionValues,
+  type ContributionSlotProps,
+} from "./types";
 
 export function ContributionSlot({
   slotId,
@@ -10,21 +18,49 @@ export function ContributionSlot({
   disabled,
 }: ContributionSlotProps) {
   const { contributions } = useContributionsForSlot(slotId);
+  const executeCommand = usePluginExecuteCommandMutation();
 
   if (contributions.length === 0) return null;
 
+  function handleCommand(
+    values: ContributionValues,
+    command: string,
+    context: Parameters<ContributionCommandHandler>[1]
+  ) {
+    if (onCommand) {
+      onCommand(command, context);
+      return;
+    }
+    void executeCommand
+      .mutateAsync({
+        command,
+        args: {
+          ...context,
+          slotId,
+          values,
+        },
+      })
+      .catch((error) => {
+        toast.error(formatActionFailureToast("执行插件命令", error).toast);
+      });
+  }
+
   return (
     <>
-      {contributions.map((contribution) => (
-        <HostRenderedContribution
-          key={`${contribution.pluginId}:${contribution.contributionId}`}
-          contribution={contribution}
-          values={valuesByContributionKey[contributionKey(contribution)] ?? {}}
-          onChange={(fieldKey, value) => onChange?.(contribution, fieldKey, value)}
-          onCommand={onCommand}
-          disabled={disabled}
-        />
-      ))}
+      {contributions.map((contribution) => {
+        const values = valuesByContributionKey[contributionKey(contribution)] ?? {};
+
+        return (
+          <HostRenderedContribution
+            key={`${contribution.pluginId}:${contribution.contributionId}`}
+            contribution={contribution}
+            values={values}
+            onChange={(fieldKey, value) => onChange?.(contribution, fieldKey, value)}
+            onCommand={(command, context) => handleCommand(values, command, context)}
+            disabled={disabled || (!onCommand && executeCommand.isPending)}
+          />
+        );
+      })}
     </>
   );
 }

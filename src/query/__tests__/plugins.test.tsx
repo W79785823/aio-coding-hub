@@ -6,10 +6,12 @@ import type { PluginDetail, PluginSummary } from "../../services/plugins";
 import {
   pluginDisable,
   pluginEnable,
+  pluginExecuteCommand,
   pluginGet,
   pluginInstallFromFile,
   pluginInstallRemote,
   pluginInstallOfficial,
+  pluginListExtensionRuntimeReports,
   pluginList,
   pluginListRuntimeReports,
   pluginExportReplayFixture,
@@ -26,6 +28,8 @@ import {
   usePluginActiveContributionsQuery,
   usePluginDisableMutation,
   usePluginEnableMutation,
+  usePluginExecuteCommandMutation,
+  usePluginExtensionRuntimeReportsQuery,
   usePluginInstallFromFileMutation,
   usePluginInstallOfficialMutation,
   usePluginInstallRemoteMutation,
@@ -49,9 +53,11 @@ vi.mock("../../services/plugins", async () => {
     pluginList: vi.fn(),
     pluginGet: vi.fn(),
     pluginEnable: vi.fn(),
+    pluginExecuteCommand: vi.fn(),
     pluginInstallFromFile: vi.fn(),
     pluginInstallRemote: vi.fn(),
     pluginInstallOfficial: vi.fn(),
+    pluginListExtensionRuntimeReports: vi.fn(),
     pluginListRuntimeReports: vi.fn(),
     pluginExportReplayFixture: vi.fn(),
     pluginQuarantineRevoked: vi.fn(),
@@ -193,6 +199,27 @@ describe("query/plugins", () => {
         created_at: 10,
       },
     ]);
+    vi.mocked(pluginListExtensionRuntimeReports).mockResolvedValue([
+      {
+        id: 1,
+        pluginId: "community.prompt-helper",
+        traceId: "trace-replay-1",
+        contributionType: "hook",
+        contributionId: "gateway.request.afterBodyRead",
+        commandOrHook: "gateway.request.afterBodyRead",
+        status: "completed",
+        startedAtMs: 1000,
+        durationMs: 7,
+        failureKind: null,
+        errorCode: null,
+        inputBudget: {},
+        outputBudget: {},
+        mutationSummary: { changed: true },
+        replayable: true,
+        createdAt: 10,
+      },
+    ]);
+    vi.mocked(pluginExecuteCommand).mockResolvedValue({ ok: true });
     vi.mocked(pluginExportReplayFixture).mockResolvedValue({
       schemaVersion: 1,
       traceId: "trace-replay-1",
@@ -233,6 +260,7 @@ describe("query/plugins", () => {
       notes: [],
     });
     const client = createTestQueryClient();
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
     const wrapper = createQueryWrapper(client);
 
     renderHook(
@@ -264,6 +292,59 @@ describe("query/plugins", () => {
         )
       )
     ).toBeTruthy();
+
+    renderHook(
+      () =>
+        usePluginExtensionRuntimeReportsQuery({
+          pluginId: " community.prompt-helper ",
+          contributionType: "hook",
+          contributionId: "gateway.request.afterBodyRead",
+          traceId: "trace-replay-1",
+          limit: 25,
+        }),
+      { wrapper }
+    );
+
+    await waitFor(() => {
+      expect(pluginListExtensionRuntimeReports).toHaveBeenCalledWith({
+        pluginId: "community.prompt-helper",
+        contributionType: "hook",
+        contributionId: "gateway.request.afterBodyRead",
+        traceId: "trace-replay-1",
+        limit: 25,
+      });
+    });
+    expect(
+      client.getQueryState(
+        pluginKeys.extensionRuntimeReports(
+          "community.prompt-helper",
+          "hook",
+          "gateway.request.afterBodyRead",
+          "trace-replay-1",
+          25
+        )
+      )
+    ).toBeTruthy();
+
+    const { result: commandResult } = renderHook(() => usePluginExecuteCommandMutation(), {
+      wrapper,
+    });
+    await act(async () => {
+      await commandResult.current.mutateAsync({
+        command: "community.prompt-helper.open",
+        args: { pluginId: "community.prompt-helper" },
+      });
+    });
+
+    expect(pluginExecuteCommand).toHaveBeenCalledWith("community.prompt-helper.open", {
+      pluginId: "community.prompt-helper",
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: pluginKeys.extensionRuntimeReportsRoot(),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: pluginKeys.detail("community.prompt-helper"),
+    });
 
     const { result } = renderHook(() => usePluginExportReplayFixtureMutation(), { wrapper });
     await act(async () => {

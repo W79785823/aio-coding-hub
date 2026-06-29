@@ -5,6 +5,7 @@ import {
   normalizePluginId,
   pluginDisable,
   pluginEnable,
+  pluginExecuteCommand,
   pluginGet,
   pluginGrantPermissions,
   pluginInstallFromFile,
@@ -12,6 +13,7 @@ import {
   pluginInstallOfficial,
   pluginList,
   pluginListAuditLogs,
+  pluginListExtensionRuntimeReports,
   pluginListRuntimeReports,
   pluginPreviewFromFile,
   pluginPreviewUpdateFromFile,
@@ -43,6 +45,12 @@ function refreshPluginContributionQueries(queryClient: QueryClientLike) {
 function refreshPluginMutationQueries(queryClient: QueryClientLike, pluginId: string) {
   refreshPluginQueries(queryClient, pluginId);
   refreshPluginContributionQueries(queryClient);
+}
+
+function pluginIdFromCommandArgs(args: JsonValue | undefined): string | null {
+  if (args == null || typeof args !== "object" || Array.isArray(args)) return null;
+  const pluginId = (args as Record<string, JsonValue>).pluginId;
+  return typeof pluginId === "string" && pluginId.trim() ? normalizePluginId(pluginId) : null;
 }
 
 function upsertPluginSummary(
@@ -124,12 +132,65 @@ export function usePluginRuntimeReportsQuery(
   });
 }
 
+export function usePluginExtensionRuntimeReportsQuery(
+  input: {
+    pluginId: string | null;
+    contributionType?: "command" | "hook" | null;
+    contributionId?: string | null;
+    traceId?: string | null;
+    limit?: number | null;
+  },
+  options?: { enabled?: boolean }
+) {
+  const normalizedPluginId = input.pluginId == null ? null : normalizePluginId(input.pluginId);
+  const contributionType = input.contributionType ?? null;
+  const contributionId = input.contributionId ?? null;
+  const traceId = input.traceId ?? null;
+  const limit = input.limit ?? 50;
+
+  return useQuery({
+    queryKey: pluginKeys.extensionRuntimeReports(
+      normalizedPluginId,
+      contributionType,
+      contributionId,
+      traceId,
+      limit
+    ),
+    queryFn: () =>
+      pluginListExtensionRuntimeReports({
+        pluginId: normalizedPluginId,
+        contributionType,
+        contributionId,
+        traceId,
+        limit,
+      }),
+    enabled: (options?.enabled ?? true) && normalizedPluginId != null,
+    placeholderData: keepPreviousData,
+  });
+}
+
 export function usePluginActiveContributionsQuery(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: pluginContributionKeys.active(),
     queryFn: () => pluginActiveContributions(),
     enabled: options?.enabled ?? true,
     placeholderData: keepPreviousData,
+  });
+}
+
+export function usePluginExecuteCommandMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { command: string; args?: JsonValue }) =>
+      pluginExecuteCommand(input.command, input.args ?? null),
+    onSettled: (_data, _error, input) => {
+      queryClient.invalidateQueries({ queryKey: pluginKeys.extensionRuntimeReportsRoot() });
+      const pluginId = pluginIdFromCommandArgs(input.args);
+      if (pluginId) {
+        queryClient.invalidateQueries({ queryKey: pluginKeys.detail(pluginId) });
+      }
+    },
   });
 }
 

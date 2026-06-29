@@ -1,4 +1,5 @@
 use crate::app::plugins::contribution_registry::ActiveContributionSnapshot;
+use crate::app::plugins::extension_host::ExtensionHostInstance;
 use crate::domain::plugins::{
     permission_risk, validate_manifest, PluginCommandImpact, PluginCompatibilitySummary,
     PluginContributionChange, PluginContributionImpact, PluginContributionImpactItem, PluginDetail,
@@ -8,8 +9,12 @@ use crate::domain::plugins::{
     PluginRuntimeLifecycleSummary, PluginStatus, PluginTrustSummary, PluginUiSlotImpact,
     PluginUpdateDiff,
 };
+use crate::infra::plugins::runtime_reports::{
+    record_extension_execution_report, RecordPluginExtensionExecutionReportInput,
+};
 use crate::infra::plugins::{package, repository, signing};
 use crate::shared::error::{AppError, AppResult};
+use crate::shared::time::now_unix_millis;
 use rusqlite::OptionalExtension;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,6 +41,204 @@ pub(crate) fn active_plugin_contributions(
         )?);
     }
     ActiveContributionSnapshot::from_plugin_details(&details)
+}
+
+pub(crate) async fn execute_plugin_command(
+    db: &crate::db::Db,
+    command: &str,
+    args: serde_json::Value,
+) -> AppResult<serde_json::Value> {
+    let command = normalize_plugin_command(command)?;
+    let detail = find_declared_command_owner(db, &command)?.ok_or_else(|| {
+        AppError::new(
+            "PLUGIN_COMMAND_NOT_FOUND",
+            format!("plugin command is not declared: {command}"),
+        )
+    })?;
+    if detail.summary.status != PluginStatus::Enabled {
+        return Err(AppError::new(
+            "PLUGIN_COMMAND_PLUGIN_DISABLED",
+            format!(
+                "plugin {} is not enabled for command {command}",
+                detail.summary.plugin_id
+            ),
+        ));
+    }
+    if !matches!(detail.manifest.runtime, PluginRuntime::ExtensionHost { .. }) {
+        return Err(AppError::new(
+            "PLUGIN_COMMAND_RUNTIME_UNSUPPORTED",
+            format!("plugin command {command} is not backed by an extension host runtime"),
+        ));
+    }
+    let plugin_root = detail.installed_dir.clone().ok_or_else(|| {
+        AppError::new(
+            "PLUGIN_EXTENSION_HOST_ROOT_UNAVAILABLE",
+            format!(
+                "plugin {} does not have an installed extension host directory",
+                detail.summary.plugin_id
+            ),
+        )
+    })?;
+
+    let plugin_id = detail.summary.plugin_id.clone();
+    let trace_id = args
+        .get("traceId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let started_at_ms = now_unix_millis();
+    let result = execute_extension_host_command_once(
+        db,
+        detail.manifest,
+        PathBuf::from(plugin_root),
+        &command,
+        args.clone(),
+    )
+    .await;
+    let duration_ms = now_unix_millis().saturating_sub(started_at_ms);
+
+    match result {
+        Ok(value) => {
+            if let Err(report_error) = record_command_execution_report(
+                db,
+                &plugin_id,
+                &command,
+                trace_id,
+                started_at_ms,
+                duration_ms,
+                "completed",
+                None,
+                None,
+                &args,
+                Some(&value),
+            ) {
+                tracing::warn!(
+                    plugin_id,
+                    command,
+                    error = %report_error,
+                    "failed to record successful plugin command execution report"
+                );
+            }
+            Ok(value)
+        }
+        Err(error) => {
+            if let Err(report_error) = record_command_execution_report(
+                db,
+                &plugin_id,
+                &command,
+                trace_id,
+                started_at_ms,
+                duration_ms,
+                "failed",
+                Some("runtime"),
+                Some(error.code()),
+                &args,
+                None,
+            ) {
+                tracing::warn!(
+                    plugin_id,
+                    command,
+                    error = %report_error,
+                    "failed to record plugin command execution report"
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
+fn normalize_plugin_command(command: &str) -> AppResult<String> {
+    let command = command.trim();
+    if command.is_empty() {
+        return Err(AppError::new(
+            "SEC_INVALID_INPUT",
+            "plugin command is required",
+        ));
+    }
+    Ok(command.to_string())
+}
+
+fn find_declared_command_owner(
+    db: &crate::db::Db,
+    command: &str,
+) -> AppResult<Option<PluginDetail>> {
+    for summary in repository::list_plugins(db)? {
+        let detail = detail_with_config_defaults_for_db(
+            db,
+            repository::get_plugin(db, &summary.plugin_id)?,
+        )?;
+        let declared = detail
+            .manifest
+            .contributes
+            .as_ref()
+            .is_some_and(|contributes| {
+                contributes
+                    .commands
+                    .iter()
+                    .any(|contribution| contribution.command == command)
+            });
+        if declared {
+            return Ok(Some(detail));
+        }
+    }
+    Ok(None)
+}
+
+async fn execute_extension_host_command_once(
+    db: &crate::db::Db,
+    manifest: PluginManifest,
+    plugin_root: PathBuf,
+    command: &str,
+    args: serde_json::Value,
+) -> AppResult<serde_json::Value> {
+    let mut host =
+        ExtensionHostInstance::start_with_host_api(manifest, plugin_root, db.clone()).await?;
+    let result = host.execute_command(command, args).await;
+    host.dispose().await;
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_command_execution_report(
+    db: &crate::db::Db,
+    plugin_id: &str,
+    command: &str,
+    trace_id: Option<String>,
+    started_at_ms: i64,
+    duration_ms: i64,
+    status: &str,
+    failure_kind: Option<&str>,
+    error_code: Option<&str>,
+    args: &serde_json::Value,
+    output: Option<&serde_json::Value>,
+) -> AppResult<()> {
+    record_extension_execution_report(
+        db,
+        RecordPluginExtensionExecutionReportInput {
+            plugin_id: plugin_id.to_string(),
+            contribution_type: "command".to_string(),
+            contribution_id: command.to_string(),
+            command_or_hook: Some(command.to_string()),
+            trace_id,
+            status: status.to_string(),
+            started_at_ms,
+            duration_ms,
+            failure_kind: failure_kind.map(str::to_string),
+            error_code: error_code.map(str::to_string),
+            input_budget: json_budget(args),
+            output_budget: output
+                .map(json_budget)
+                .unwrap_or_else(|| serde_json::json!({})),
+            mutation_summary: serde_json::json!({ "changed": false }),
+            replayable: false,
+        },
+    )
+    .map(|_| ())
+}
+
+fn json_budget(value: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "bytes": serde_json::to_vec(value).map(|bytes| bytes.len()).unwrap_or(0)
+    })
 }
 
 pub(crate) fn enabled_plugins_for_gateway(db: &crate::db::Db) -> AppResult<Vec<PluginDetail>> {
@@ -371,12 +574,8 @@ fn runtime_lifecycle_summary(manifest: &PluginManifest) -> PluginRuntimeLifecycl
         PluginRuntime::ExtensionHost { .. } => PluginRuntimeLifecycleSummary {
             kind: "extensionHost".to_string(),
             label: "Extension Host".to_string(),
-            supported: false,
-            blocking_reasons: vec![lifecycle_notice(
-                "warn",
-                "PLUGIN_EXTENSION_HOST_NOT_WIRED",
-                "extension host runtime execution is not wired in this release",
-            )],
+            supported: true,
+            blocking_reasons: Vec::new(),
         },
         PluginRuntime::DeclarativeRules { .. } => PluginRuntimeLifecycleSummary {
             kind: "declarativeRules".to_string(),
@@ -1940,10 +2139,7 @@ fn ensure_required_permissions_granted(detail: &PluginDetail) -> AppResult<()> {
 
 fn ensure_runtime_enabled(manifest: &PluginManifest) -> AppResult<()> {
     match &manifest.runtime {
-        PluginRuntime::ExtensionHost { .. } => Err(AppError::new(
-            "PLUGIN_RUNTIME_DISABLED",
-            "extension host runtime execution is not wired in this release",
-        )),
+        PluginRuntime::ExtensionHost { .. } => Ok(()),
         PluginRuntime::DeclarativeRules { .. } => Ok(()),
         PluginRuntime::Native { engine }
             if manifest.id == "official.privacy-filter" && engine == "privacyFilter" =>
@@ -2390,6 +2586,118 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    fn extension_manifest(plugin_id: &str, command: &str) -> PluginManifest {
+        serde_json::from_value(serde_json::json!({
+            "id": plugin_id,
+            "name": "Acme Debug",
+            "version": "1.0.0",
+            "apiVersion": "1.0.0",
+            "runtime": { "kind": "extensionHost", "language": "typescript" },
+            "main": "dist/extension.js",
+            "activationEvents": [format!("onCommand:{command}")],
+            "contributes": {
+                "commands": [
+                    {
+                        "command": command,
+                        "title": "Export Trace",
+                        "category": "Debug"
+                    }
+                ]
+            },
+            "capabilities": ["commands.execute"],
+            "hostCompatibility": {
+                "app": ">=0.56.0 <1.0.0",
+                "pluginApi": "^1.0.0",
+                "platforms": ["macos", "windows", "linux"]
+            }
+        }))
+        .expect("extension manifest")
+    }
+
+    fn install_enabled_extension_with_command(
+        db: &crate::db::Db,
+        root: &Path,
+        plugin_id: &str,
+        command: &str,
+    ) {
+        std::fs::create_dir_all(root.join("dist")).expect("create dist");
+        let manifest = extension_manifest(plugin_id, command);
+        std::fs::write(
+            root.join("plugin.json"),
+            serde_json::to_vec_pretty(&manifest).expect("manifest json"),
+        )
+        .expect("write manifest");
+        std::fs::write(
+            root.join("dist/extension.js"),
+            format!(
+                r#"
+                module.exports.activate = function(api) {{
+                  api.commands.registerCommand("{command}", function(args) {{
+                    api.storage.set("lastTraceId", args.traceId);
+                    return {{
+                      ok: true,
+                      traceId: args.traceId,
+                      storedTraceId: api.storage.get("lastTraceId")
+                    }};
+                  }});
+                }};
+                "#
+            ),
+        )
+        .expect("write extension");
+
+        install_plugin_manifest(
+            db,
+            manifest,
+            PluginInstallSource::Local,
+            Some(root.to_string_lossy().to_string()),
+            env!("CARGO_PKG_VERSION"),
+        )
+        .expect("install extension");
+        repository::update_plugin_status(db, plugin_id, PluginStatus::Enabled, None)
+            .expect("enable extension");
+    }
+
+    #[tokio::test]
+    async fn plugin_command_execution_records_extension_report() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).expect("db");
+        let plugin_root = dir.path().join("acme.debug");
+        install_enabled_extension_with_command(
+            &db,
+            &plugin_root,
+            "acme.debug",
+            "acme.debug.exportTrace",
+        );
+
+        let value = execute_plugin_command(
+            &db,
+            "acme.debug.exportTrace",
+            serde_json::json!({ "traceId": "trace-1" }),
+        )
+        .await
+        .expect("execute command");
+
+        assert_eq!(
+            value,
+            serde_json::json!({ "ok": true, "traceId": "trace-1", "storedTraceId": "trace-1" })
+        );
+        let detail = repository::get_plugin(&db, "acme.debug").expect("plugin");
+        assert_eq!(detail.config["storage"]["lastTraceId"], "trace-1");
+        let reports = crate::infra::plugins::runtime_reports::list_extension_execution_reports(
+            &db,
+            Some("acme.debug"),
+            Some("command"),
+            Some("acme.debug.exportTrace"),
+            None,
+            20,
+        )
+        .expect("list reports");
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].contribution_type, "command");
+        assert_eq!(reports[0].contribution_id, "acme.debug.exportTrace");
     }
 
     #[test]

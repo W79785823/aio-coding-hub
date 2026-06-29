@@ -52,6 +52,12 @@ struct WorkerState {
     activated: bool,
     deadline: Arc<Mutex<Option<Instant>>>,
     js_timeout: Duration,
+    host_calls: Arc<Mutex<WorkerHostCallState>>,
+}
+
+struct WorkerHostCallState {
+    next_host_call_id: u64,
+    max_line_bytes: usize,
 }
 
 pub fn run_stdio_worker() {
@@ -92,10 +98,13 @@ fn run_stdio_worker_inner() -> Result<(), WorkerError> {
         config.max_line_bytes,
     )?;
 
-    let stdin = io::stdin();
-    let mut stdin = stdin.lock();
     loop {
-        let line = match read_bounded_stdin_line(&mut stdin, config.max_line_bytes)? {
+        let line = {
+            let stdin = io::stdin();
+            let mut stdin = stdin.lock();
+            read_bounded_stdin_line(&mut stdin, config.max_line_bytes)?
+        };
+        let line = match line {
             WorkerStdinLine::Line(line) => line,
             WorkerStdinLine::TooLarge => {
                 emit_protocol_error(
@@ -238,6 +247,10 @@ impl WorkerState {
             activated: false,
             deadline,
             js_timeout: Duration::from_millis(config.js_timeout_ms),
+            host_calls: Arc::new(Mutex::new(WorkerHostCallState {
+                next_host_call_id: 1,
+                max_line_bytes: config.max_line_bytes,
+            })),
         };
         state.load_main(&main_path)?;
         Ok(state)
@@ -357,6 +370,8 @@ impl WorkerState {
             return Ok(());
         }
         let declared_commands = self.declared_commands.clone();
+        let plugin_id = self.manifest.id.clone();
+        let host_calls = Arc::clone(&self.host_calls);
         self.with_js_deadline(|| {
             self.context.with(|ctx| {
                 let globals = ctx.globals();
@@ -385,6 +400,79 @@ impl WorkerState {
                     .set("registerCommand", register)
                     .map_err(js_runtime_error)?;
                 api.set("commands", commands).map_err(js_runtime_error)?;
+
+                let host_calls_for_api = Arc::clone(&host_calls);
+                let host_call_fn = Function::new(
+                    ctx.clone(),
+                    move |method: String, params_json: String| -> rquickjs::Result<String> {
+                        let params: Value = serde_json::from_str(&params_json).map_err(|err| {
+                            rquickjs::Error::new_from_js_message(
+                                "JSON string",
+                                "host API params",
+                                format!(
+                                    "PLUGIN_EXTENSION_HOST_DECODE_FAILED: failed to decode host API params: {err}"
+                                ),
+                            )
+                        })?;
+                        let value =
+                            host_call(&method, params, &host_calls_for_api).map_err(worker_error_to_js)?;
+                        serde_json::to_string(&value).map_err(|err| {
+                            worker_error_to_js(WorkerError::new(
+                                "PLUGIN_EXTENSION_HOST_ENCODE_FAILED",
+                                format!("failed to encode host API result: {err}"),
+                            ))
+                        })
+                    },
+                )
+                .map_err(js_runtime_error)?;
+                globals
+                    .set("__aioHostCall", host_call_fn)
+                    .map_err(js_runtime_error)?;
+
+                let plugin_id_json = serde_json::to_string(&plugin_id).map_err(|err| {
+                    WorkerError::new(
+                        "PLUGIN_EXTENSION_HOST_ENCODE_FAILED",
+                        format!("failed to encode plugin id for host API: {err}"),
+                    )
+                })?;
+                let storage_source = format!(
+                    r#"
+                    ({{
+                      get(key) {{
+                        return JSON.parse(globalThis.__aioHostCall(
+                          "storage.get",
+                          JSON.stringify({{ pluginId: {plugin_id_json}, key }})
+                        ));
+                      }},
+                      set(key, value) {{
+                        JSON.parse(globalThis.__aioHostCall(
+                          "storage.set",
+                          JSON.stringify({{ pluginId: {plugin_id_json}, key, value }})
+                        ));
+                      }}
+                    }})
+                    "#
+                );
+                let storage: Object = ctx.eval(storage_source.as_str()).map_err(js_runtime_error)?;
+                api.set("storage", storage).map_err(js_runtime_error)?;
+
+                let diagnostics_source = format!(
+                    r#"
+                    ({{
+                      getRuntimeReports(limit) {{
+                        return JSON.parse(globalThis.__aioHostCall(
+                          "diagnostics.getRuntimeReports",
+                          JSON.stringify({{ pluginId: {plugin_id_json}, limit }})
+                        ));
+                      }}
+                    }})
+                    "#
+                );
+                let diagnostics: Object = ctx
+                    .eval(diagnostics_source.as_str())
+                    .map_err(js_runtime_error)?;
+                api.set("diagnostics", diagnostics)
+                    .map_err(js_runtime_error)?;
 
                 let module: Object = globals.get("module").map_err(js_runtime_error)?;
                 let exports: Object = module.get("exports").map_err(js_runtime_error)?;
@@ -681,6 +769,98 @@ fn emit_line(value: Value, max_line_bytes: usize) -> Result<(), WorkerError> {
     lock.write_all(&bytes).map_err(write_error)?;
     lock.write_all(b"\n").map_err(write_error)?;
     lock.flush().map_err(write_error)
+}
+
+fn host_call(
+    method: &str,
+    params: Value,
+    host_calls: &Arc<Mutex<WorkerHostCallState>>,
+) -> Result<Value, WorkerError> {
+    let (id, max_line_bytes) = {
+        let mut state = host_calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let id = state.next_host_call_id;
+        state.next_host_call_id = state.next_host_call_id.saturating_add(1);
+        (id, state.max_line_bytes)
+    };
+    emit_line(
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "host.call",
+            "params": {
+                "method": method,
+                "params": params,
+            },
+        }),
+        max_line_bytes,
+    )?;
+
+    let line = {
+        let stdin = io::stdin();
+        let mut stdin = stdin.lock();
+        read_bounded_stdin_line(&mut stdin, max_line_bytes)?
+    };
+    let line = match line {
+        WorkerStdinLine::Line(line) => line,
+        WorkerStdinLine::TooLarge => {
+            return Err(WorkerError::new(
+                "PLUGIN_EXTENSION_HOST_RESPONSE_TOO_LARGE",
+                format!("host API response exceeded {max_line_bytes} bytes"),
+            ));
+        }
+        WorkerStdinLine::Eof => {
+            return Err(WorkerError::new(
+                "PLUGIN_EXTENSION_HOST_HOST_CLOSED",
+                "host closed stdin before returning host API response",
+            ));
+        }
+    };
+    let response: Value = serde_json::from_slice(&line).map_err(|err| {
+        WorkerError::new(
+            "PLUGIN_EXTENSION_HOST_PROTOCOL_ERROR",
+            format!("host API response was not valid JSON-RPC: {err}"),
+        )
+    })?;
+    if response.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return Err(WorkerError::new(
+            "PLUGIN_EXTENSION_HOST_PROTOCOL_ERROR",
+            "host API response must use JSON-RPC 2.0",
+        ));
+    }
+    if response.get("id").and_then(Value::as_u64) != Some(id) {
+        return Err(WorkerError::new(
+            "PLUGIN_EXTENSION_HOST_PROTOCOL_ERROR",
+            "host API response id did not match request id",
+        ));
+    }
+    if let Some(error) = response.get("error") {
+        let code = error
+            .get("data")
+            .and_then(|data| data.get("code"))
+            .and_then(Value::as_str)
+            .unwrap_or("PLUGIN_EXTENSION_HOST_API_ERROR");
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("host API returned an error");
+        return Err(WorkerError::new(code, message));
+    }
+    response.get("result").cloned().ok_or_else(|| {
+        WorkerError::new(
+            "PLUGIN_EXTENSION_HOST_PROTOCOL_ERROR",
+            "host API response was missing result",
+        )
+    })
+}
+
+fn worker_error_to_js(err: WorkerError) -> rquickjs::Error {
+    rquickjs::Error::new_from_js_message(
+        "host API",
+        "successful host response",
+        format!("{}: {}", err.code, err.message),
+    )
 }
 
 fn json_string_literal(value: &str) -> String {
