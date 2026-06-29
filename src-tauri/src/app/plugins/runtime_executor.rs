@@ -1,10 +1,14 @@
 //! Usage: Runtime dispatch for gateway plugin execution.
 
+use crate::app::plugins::extension_host_registry::ExtensionHostInstanceRegistry;
 use crate::app::plugins::official_privacy_filter_runtime::OfficialPrivacyFilterRuntime;
 use crate::app::plugins::runtime_lifecycle::RuntimeLifecycleRegistry;
 use crate::app::plugins::runtime_manager::{PluginRuntimeManager, RuntimeDispatch};
+use crate::db;
 use crate::domain::plugins::PluginDetail;
-use crate::gateway::plugins::context::{GatewayHookResult, GatewayVisibleHookContext};
+#[cfg(test)]
+use crate::gateway::plugins::context::GatewayHookResult;
+use crate::gateway::plugins::context::GatewayVisibleHookContext;
 use crate::gateway::plugins::permissions::GatewayPluginError;
 use crate::gateway::plugins::pipeline::{GatewayHookFuture, GatewayPluginExecutor};
 use std::sync::Arc;
@@ -12,24 +16,40 @@ use std::sync::Arc;
 pub(crate) struct RuntimeGatewayPluginExecutor {
     privacy_filter_runtime: Arc<OfficialPrivacyFilterRuntime>,
     lifecycle: RuntimeLifecycleRegistry,
+    extension_host_registry: Option<Arc<ExtensionHostInstanceRegistry>>,
 }
 
 impl RuntimeGatewayPluginExecutor {
     pub(crate) fn new() -> Self {
+        Self::with_extension_host_registry(None)
+    }
+
+    pub(crate) fn with_db(db: db::Db) -> Self {
+        Self::with_extension_host_registry(Some(Arc::new(ExtensionHostInstanceRegistry::new(db))))
+    }
+
+    fn with_extension_host_registry(
+        extension_host_registry: Option<Arc<ExtensionHostInstanceRegistry>>,
+    ) -> Self {
         let privacy_filter_runtime = Arc::new(OfficialPrivacyFilterRuntime::default());
         let lifecycle = RuntimeLifecycleRegistry::default();
         lifecycle.register_cache(privacy_filter_runtime.clone());
         Self {
             privacy_filter_runtime,
             lifecycle,
+            extension_host_registry,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn for_tests() -> Self {
-        Self::new()
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = crate::db::init_for_tests(&temp.path().join("runtime-executor.db"))
+            .expect("init test db");
+        Self::with_db(db)
     }
 
+    #[cfg(test)]
     pub(crate) fn execute_plugin_sync(
         &self,
         plugin: &PluginDetail,
@@ -41,10 +61,44 @@ impl RuntimeGatewayPluginExecutor {
             RuntimeDispatch::NativePrivacyFilter => {
                 self.privacy_filter_runtime.execute_plugin(plugin, context)
             }
-            RuntimeDispatch::ExtensionHost => Err(GatewayPluginError::new(
-                "PLUGIN_EXTENSION_HOST_GATEWAY_NOT_WIRED",
-                "extension host gateway hook execution is not wired in this release",
-            )),
+            RuntimeDispatch::ExtensionHost => {
+                ensure_gateway_hooks_capability(plugin)?;
+                Err(GatewayPluginError::new(
+                    "PLUGIN_EXTENSION_HOST_GATEWAY_ASYNC_REQUIRED",
+                    "extension host gateway hook execution requires async dispatch",
+                ))
+            }
+        }
+    }
+
+    fn execute_plugin(
+        &self,
+        plugin: &PluginDetail,
+        context: GatewayVisibleHookContext,
+    ) -> GatewayHookFuture {
+        let manager = PluginRuntimeManager::new();
+        match manager.runtime_dispatch(&plugin.summary.plugin_id, &plugin.manifest.runtime) {
+            Ok(RuntimeDispatch::NativePrivacyFilter) => {
+                let result = self.privacy_filter_runtime.execute_plugin(plugin, context);
+                Box::pin(async move { result })
+            }
+            Ok(RuntimeDispatch::ExtensionHost) => {
+                if let Err(err) = ensure_gateway_hooks_capability(plugin) {
+                    return Box::pin(async move { Err(err) });
+                }
+                let Some(registry) = self.extension_host_registry.clone() else {
+                    return Box::pin(async {
+                        Err(GatewayPluginError::new(
+                            "PLUGIN_EXTENSION_HOST_GATEWAY_NOT_CONFIGURED",
+                            "extension host gateway hook registry is not configured",
+                        ))
+                    });
+                };
+                let detail = plugin.clone();
+                let hook = context.hook_name.clone();
+                Box::pin(async move { registry.execute_gateway_hook(detail, &hook, context).await })
+            }
+            Err(err) => Box::pin(async move { Err(err) }),
         }
     }
 
@@ -79,8 +133,7 @@ impl GatewayPluginExecutor for RuntimeGatewayPluginExecutor {
         plugin: &PluginDetail,
         context: GatewayVisibleHookContext,
     ) -> GatewayHookFuture {
-        let result = self.execute_plugin_sync(plugin, context);
-        Box::pin(async move { result })
+        self.execute_plugin(plugin, context)
     }
 
     fn execute_response_hook(
@@ -88,8 +141,7 @@ impl GatewayPluginExecutor for RuntimeGatewayPluginExecutor {
         plugin: &PluginDetail,
         context: GatewayVisibleHookContext,
     ) -> GatewayHookFuture {
-        let result = self.execute_plugin_sync(plugin, context);
-        Box::pin(async move { result })
+        self.execute_plugin(plugin, context)
     }
 
     fn execute_stream_hook(
@@ -97,8 +149,7 @@ impl GatewayPluginExecutor for RuntimeGatewayPluginExecutor {
         plugin: &PluginDetail,
         context: GatewayVisibleHookContext,
     ) -> GatewayHookFuture {
-        let result = self.execute_plugin_sync(plugin, context);
-        Box::pin(async move { result })
+        self.execute_plugin(plugin, context)
     }
 
     fn execute_log_hook(
@@ -106,8 +157,23 @@ impl GatewayPluginExecutor for RuntimeGatewayPluginExecutor {
         plugin: &PluginDetail,
         context: GatewayVisibleHookContext,
     ) -> GatewayHookFuture {
-        let result = self.execute_plugin_sync(plugin, context);
-        Box::pin(async move { result })
+        self.execute_plugin(plugin, context)
+    }
+}
+
+fn ensure_gateway_hooks_capability(plugin: &PluginDetail) -> Result<(), GatewayPluginError> {
+    if plugin
+        .manifest
+        .capabilities
+        .iter()
+        .any(|capability| capability == "gateway.hooks")
+    {
+        Ok(())
+    } else {
+        Err(GatewayPluginError::new(
+            "PLUGIN_PERMISSION_DENIED",
+            "extension host gateway hooks require gateway.hooks capability",
+        ))
     }
 }
 
@@ -120,22 +186,109 @@ mod tests {
         PluginPermissionRisk, PluginRuntime, PluginStatus, PluginSummary,
     };
     use crate::gateway::plugins::context::{
-        GatewayVisibleHookContext, GatewayVisibleLogContext, GatewayVisibleRequestContext,
-        GatewayVisibleResponseContext, GatewayVisibleStreamContext,
+        GatewayHookResult, GatewayVisibleHookContext, GatewayVisibleLogContext,
+        GatewayVisibleRequestContext, GatewayVisibleResponseContext, GatewayVisibleStreamContext,
     };
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::path::Path;
 
     #[test]
-    fn runtime_executor_returns_temporary_error_for_extension_host_gateway_hook() {
-        let plugin = extension_host_plugin_detail("example.extension");
+    fn runtime_executor_rejects_extension_host_gateway_hook_without_capability() {
+        let mut plugin = extension_host_plugin_detail("example.extension");
+        plugin.manifest.capabilities.clear();
         let context = hook_context("gateway.request.afterBodyRead", "trace-extension");
 
         let err = executor()
             .execute_plugin_sync(&plugin, context)
-            .expect_err("extension host gateway hooks are not wired until Task 8");
+            .expect_err("extension host gateway hooks require gateway.hooks capability");
 
-        assert_eq!(err.code(), "PLUGIN_EXTENSION_HOST_GATEWAY_NOT_WIRED");
+        assert_eq!(err.code(), "PLUGIN_PERMISSION_DENIED");
+    }
+
+    #[tokio::test]
+    async fn runtime_executor_extension_host_request_continue_maps_to_unchanged_result() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_gateway_extension_plugin(
+            temp.path(),
+            "gateway.request.afterBodyRead",
+            r#"{ action: "continue" }"#,
+        );
+        let plugin = extension_host_plugin_detail_with_root("example.extension", temp.path());
+        let context = hook_context("gateway.request.afterBodyRead", "trace-extension");
+
+        let result = executor()
+            .execute_request_hook(&plugin, context)
+            .await
+            .expect("extension host gateway hook executes");
+
+        assert_eq!(result, GatewayHookResult::continue_unchanged());
+    }
+
+    #[tokio::test]
+    async fn runtime_executor_extension_host_request_replace_maps_request_body() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_gateway_extension_plugin(
+            temp.path(),
+            "gateway.request.afterBodyRead",
+            r#"{ action: "replace", requestBody: "{\"messages\":[]}" }"#,
+        );
+        let plugin = extension_host_plugin_detail_with_root("example.extension", temp.path());
+        let context = hook_context("gateway.request.afterBodyRead", "trace-extension");
+
+        let result = executor()
+            .execute_request_hook(&plugin, context)
+            .await
+            .expect("extension host gateway hook executes");
+
+        assert_eq!(result.request_body.as_deref(), Some(r#"{"messages":[]}"#));
+    }
+
+    #[tokio::test]
+    async fn runtime_executor_extension_host_response_warn_maps_reason() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_gateway_extension_plugin(
+            temp.path(),
+            "gateway.response.after",
+            r#"{ action: "warn", message: "response looked risky" }"#,
+        );
+        let mut plugin = extension_host_plugin_detail_with_root("example.extension", temp.path());
+        plugin
+            .manifest
+            .contributes
+            .as_mut()
+            .expect("contributes")
+            .gateway_hooks[0]
+            .name = "gateway.response.after".to_string();
+        let context = hook_context("gateway.response.after", "trace-extension");
+
+        let result = executor()
+            .execute_response_hook(&plugin, context)
+            .await
+            .expect("extension host gateway hook executes");
+
+        assert_eq!(result.reason.as_deref(), Some("response looked risky"));
+        assert_eq!(result.request_body, None);
+        assert_eq!(result.response_body, None);
+    }
+
+    #[tokio::test]
+    async fn runtime_executor_extension_host_unsupported_action_is_rejected() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_gateway_extension_plugin(
+            temp.path(),
+            "gateway.request.afterBodyRead",
+            r#"{ action: "teleport" }"#,
+        );
+        let plugin = extension_host_plugin_detail_with_root("example.extension", temp.path());
+        let context = hook_context("gateway.request.afterBodyRead", "trace-extension");
+
+        let err = executor()
+            .execute_request_hook(&plugin, context)
+            .await
+            .expect_err("unsupported gateway hook action should be rejected");
+
+        assert_eq!(err.code(), "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT");
     }
 
     #[test]
@@ -229,6 +382,52 @@ mod tests {
             "extensionHost".to_string(),
             None,
         )
+    }
+
+    fn extension_host_plugin_detail_with_root(plugin_id: &str, root: &Path) -> PluginDetail {
+        plugin_detail(
+            plugin_id,
+            PluginRuntime::ExtensionHost {
+                language: "typescript".to_string(),
+            },
+            "extensionHost".to_string(),
+            Some(root.to_string_lossy().to_string()),
+        )
+    }
+
+    fn write_gateway_extension_plugin(root: &Path, hook_name: &str, result_source: &str) {
+        std::fs::create_dir_all(root.join("dist")).expect("create dist");
+        let manifest = json!({
+            "id": "example.extension",
+            "name": "Example Extension",
+            "version": "1.0.0",
+            "apiVersion": "1.0.0",
+            "runtime": { "kind": "extensionHost", "language": "typescript" },
+            "main": "dist/index.js",
+            "contributes": {
+                "gatewayHooks": [{ "name": hook_name, "priority": 10, "failurePolicy": "fail-open" }]
+            },
+            "capabilities": ["gateway.hooks"],
+            "hostCompatibility": { "app": ">=0.56.0 <1.0.0", "pluginApi": "^1.0.0" }
+        });
+        std::fs::write(
+            root.join("plugin.json"),
+            serde_json::to_vec_pretty(&manifest).expect("manifest json"),
+        )
+        .expect("write plugin manifest");
+        std::fs::write(
+            root.join("dist/index.js"),
+            format!(
+                r#"
+                module.exports.activate = function(api) {{
+                  api.gateway.registerHook("{hook_name}", function() {{
+                    return {result_source};
+                  }});
+                }};
+                "#
+            ),
+        )
+        .expect("write extension");
     }
 
     fn official_privacy_filter_plugin_detail(config: serde_json::Value) -> PluginDetail {

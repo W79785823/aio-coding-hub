@@ -496,6 +496,7 @@ impl GatewayPluginPipeline {
                     execution_reports,
                 });
             }
+            push_warning_event(&mut audit_events, plugin, input.hook_name, &result);
             execution_reports.push(self.hook_execution_report(
                 plugin,
                 input.hook_name,
@@ -756,6 +757,7 @@ impl GatewayPluginPipeline {
                     execution_reports,
                 });
             }
+            push_warning_event(&mut audit_events, plugin, input.hook_name, &result);
             execution_reports.push(self.hook_execution_report(
                 plugin,
                 input.hook_name,
@@ -984,6 +986,7 @@ impl GatewayPluginPipeline {
                     execution_reports,
                 });
             }
+            push_warning_event(&mut audit_events, plugin, hook_name, &result);
             execution_reports.push(self.hook_execution_report(
                 plugin,
                 hook_name,
@@ -1172,6 +1175,7 @@ impl GatewayPluginPipeline {
             if let Some(next_message) = result.log_message.as_ref() {
                 message = next_message.clone();
             }
+            push_warning_event(&mut audit_events, plugin, hook_name, &result);
             execution_reports.push(self.hook_execution_report(
                 plugin,
                 hook_name,
@@ -1676,6 +1680,25 @@ fn timeout_event(
         "Plugin hook timed out",
         serde_json::json!({ "failureKind": "timeout" }),
     )
+}
+
+fn push_warning_event(
+    audit_events: &mut Vec<GatewayPluginAuditEvent>,
+    plugin: &PluginDetail,
+    hook_name: GatewayPluginHookName,
+    result: &GatewayHookResult,
+) {
+    let Some(message) = result.reason.as_deref() else {
+        return;
+    };
+    audit_events.push(audit_event(
+        plugin,
+        hook_name,
+        "plugin.hook.warned",
+        "medium",
+        "Plugin hook warning",
+        serde_json::json!({ "message": message }),
+    ));
 }
 
 fn timeout_error(plugin_id: &str) -> GatewayPluginError {
@@ -2221,6 +2244,110 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn extension_host_request_hook_continue_leaves_body_unchanged() {
+        let executor =
+            InMemoryGatewayPluginExecutor::new().with_request_handler("plugin.extension", |ctx| {
+                assert_eq!(ctx.hook_name, "gateway.request.afterBodyRead");
+                assert_eq!(ctx.request.body.as_deref(), Some("hello"));
+                GatewayHookResult::continue_unchanged()
+            });
+        let pipeline = GatewayPluginPipeline::for_tests(
+            vec![plugin("plugin.extension", 10, vec!["request.body.read"])],
+            Arc::new(executor),
+            GatewayPluginPipelineConfig::default(),
+        );
+
+        let output = pipeline
+            .run_request_hook(request_input())
+            .await
+            .expect("extension host continue should pass request through");
+
+        assert_eq!(output.body.as_ref(), b"hello");
+        assert_eq!(output.execution_reports.len(), 1);
+        assert_eq!(output.execution_reports[0].runtime_kind, "extensionHost");
+        assert_eq!(output.execution_reports[0].status, "completed");
+        assert_eq!(
+            output.execution_reports[0].mutation_summary["changed"],
+            serde_json::json!(false)
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn extension_host_request_hook_replace_changes_body() {
+        let executor =
+            InMemoryGatewayPluginExecutor::new().with_request_handler("plugin.extension", |_ctx| {
+                GatewayHookResult {
+                    request_body: Some(r#"{"messages":[]}"#.to_string()),
+                    ..GatewayHookResult::continue_unchanged()
+                }
+            });
+        let pipeline = GatewayPluginPipeline::for_tests(
+            vec![plugin(
+                "plugin.extension",
+                10,
+                vec!["request.body.read", "request.body.write"],
+            )],
+            Arc::new(executor),
+            GatewayPluginPipelineConfig::default(),
+        );
+
+        let output = pipeline
+            .run_request_hook(request_input())
+            .await
+            .expect("extension host replace should mutate request body");
+
+        assert_eq!(output.body.as_ref(), br#"{"messages":[]}"#);
+        assert_eq!(
+            output.execution_reports[0].mutation_summary["fields"][0]["field"],
+            serde_json::json!("requestBody")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn extension_host_response_hook_warn_records_audit_and_report() {
+        let executor = InMemoryGatewayPluginExecutor::new().with_response_handler(
+            "plugin.extension",
+            |_ctx| GatewayHookResult {
+                reason: Some("response looked risky".to_string()),
+                ..GatewayHookResult::continue_unchanged()
+            },
+        );
+        let mut plugin = plugin(
+            "plugin.extension",
+            10,
+            vec!["response.body.read", "response.header.read"],
+        );
+        gateway_hook_mut(&mut plugin).name = "gateway.response.after".to_string();
+        let pipeline = GatewayPluginPipeline::for_tests(
+            vec![plugin],
+            Arc::new(executor),
+            GatewayPluginPipelineConfig::default(),
+        );
+
+        let output = pipeline
+            .run_response_hook(response_input())
+            .await
+            .expect("extension host warn should not fail response");
+
+        assert_eq!(output.body.as_ref(), b"secret response");
+        assert!(output.audit_events.iter().any(|event| {
+            event.plugin_id == "plugin.extension"
+                && event.hook_name == "gateway.response.after"
+                && event.event_type == "plugin.hook.warned"
+                && event.risk_level == "medium"
+                && event.details.get("message") == Some(&serde_json::json!("response looked risky"))
+        }));
+        assert!(output.execution_reports.iter().any(|report| {
+            report.plugin_id == "plugin.extension"
+                && report.runtime_kind == "extensionHost"
+                && report.hook_name == "gateway.response.after"
+                && report.status == "completed"
+                && report.error_code.is_none()
+                && report.replayable
+        }));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn gateway_plugin_pipeline_rejects_oversized_request_output_fail_open_before_applying() {
         let executor =
             InMemoryGatewayPluginExecutor::new().with_request_handler("plugin.large", |_ctx| {
@@ -2374,6 +2501,61 @@ mod tests {
         assert!(second.audit_events.iter().any(|event| {
             event.plugin_id == "plugin.slow" && event.event_type == "plugin.hook.skipped"
         }));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn extension_host_timeout_records_failure_and_fail_open_preserves_body() {
+        let executor = InMemoryGatewayPluginExecutor::new().with_request_async_handler(
+            "plugin.extension",
+            |_ctx| async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                GatewayHookResult {
+                    request_body: Some("late mutation".to_string()),
+                    ..GatewayHookResult::continue_unchanged()
+                }
+            },
+        );
+        let pipeline = GatewayPluginPipeline::for_tests(
+            vec![plugin(
+                "plugin.extension",
+                10,
+                vec!["request.body.read", "request.body.write"],
+            )],
+            Arc::new(executor),
+            GatewayPluginPipelineConfig {
+                hook_timeout: Duration::from_millis(1),
+                circuit_failure_threshold: 1,
+                circuit_cooldown: Duration::from_secs(60),
+                ..GatewayPluginPipelineConfig::default()
+            },
+        );
+
+        let output = pipeline
+            .run_request_hook(request_input())
+            .await
+            .expect("extension host timeout should fail open");
+
+        assert_eq!(output.body.as_ref(), b"hello");
+        assert!(output.audit_events.iter().any(|event| {
+            event.plugin_id == "plugin.extension"
+                && event.event_type == "plugin.hook.failed"
+                && event.details.get("failureKind") == Some(&serde_json::json!("timeout"))
+        }));
+        assert_eq!(output.execution_reports.len(), 1);
+        assert_eq!(output.execution_reports[0].runtime_kind, "extensionHost");
+        assert_eq!(output.execution_reports[0].status, "failedOpen");
+        assert_eq!(
+            output.execution_reports[0].failure_kind.as_deref(),
+            Some("timeout")
+        );
+        assert_eq!(
+            output.execution_reports[0].error_code.as_deref(),
+            Some("PLUGIN_HOOK_TIMEOUT")
+        );
+        assert_eq!(
+            output.execution_reports[0].mutation_summary["changed"],
+            serde_json::json!(false)
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

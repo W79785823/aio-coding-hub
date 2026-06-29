@@ -48,6 +48,7 @@ struct WorkerState {
     expected_contribution_hash: Option<String>,
     manifest_contribution_hash: String,
     declared_commands: BTreeSet<String>,
+    declared_gateway_hooks: BTreeSet<String>,
     context: Context,
     activated: bool,
     deadline: Arc<Mutex<Option<Instant>>>,
@@ -226,6 +227,7 @@ impl WorkerState {
             ));
         }
         let declared_commands = declared_commands(manifest.contributes.as_ref());
+        let declared_gateway_hooks = declared_gateway_hooks(manifest.contributes.as_ref());
         let runtime = Runtime::new().map_err(js_init_error)?;
         runtime.set_memory_limit(32 * 1024 * 1024);
         runtime.set_max_stack_size(512 * 1024);
@@ -243,6 +245,7 @@ impl WorkerState {
             expected_contribution_hash: config.contribution_hash,
             manifest_contribution_hash,
             declared_commands,
+            declared_gateway_hooks,
             context,
             activated: false,
             deadline,
@@ -281,6 +284,24 @@ impl WorkerState {
                 let args = request.params.get("args").cloned().unwrap_or(Value::Null);
                 self.execute_command(command, args)
             }
+            "gatewayHooks.execute" => {
+                let hook = request
+                    .params
+                    .get("hook")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        WorkerError::new(
+                            "PLUGIN_EXTENSION_HOST_INVALID_REQUEST",
+                            "gatewayHooks.execute requires hook",
+                        )
+                    })?;
+                let context = request
+                    .params
+                    .get("context")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                self.execute_gateway_hook(hook, context)
+            }
             method => Err(WorkerError::new(
                 "PLUGIN_EXTENSION_HOST_METHOD_NOT_FOUND",
                 format!("unsupported extension host method: {method}"),
@@ -311,6 +332,7 @@ impl WorkerState {
         let bootstrap = format!(
             r#"
             globalThis.__aioCommands = Object.create(null);
+            globalThis.__aioGatewayHooks = Object.create(null);
             globalThis.module = {{ exports: {{}} }};
             globalThis.exports = globalThis.module.exports;
             globalThis.__filename = {escaped_path};
@@ -372,6 +394,7 @@ impl WorkerState {
             return Ok(());
         }
         let declared_commands = self.declared_commands.clone();
+        let declared_gateway_hooks = self.declared_gateway_hooks.clone();
         let plugin_id = self.manifest.id.clone();
         let capabilities: BTreeSet<String> = self.manifest.capabilities.iter().cloned().collect();
         let host_calls = Arc::clone(&self.host_calls);
@@ -404,6 +427,30 @@ impl WorkerState {
                         .set("registerCommand", register)
                         .map_err(js_runtime_error)?;
                     api.set("commands", commands).map_err(js_runtime_error)?;
+                }
+                if capabilities.contains("gateway.hooks") {
+                    let gateway = Object::new(ctx.clone()).map_err(js_runtime_error)?;
+                    let declared_for_register = declared_gateway_hooks.clone();
+                    let register = Function::new(
+                        ctx.clone(),
+                        move |hook: String, handler: Function<'_>| -> rquickjs::Result<()> {
+                            if !declared_for_register.contains(&hook) {
+                                return Err(rquickjs::Error::new_from_js_message(
+                                    "gateway hook",
+                                    "declared gateway hook",
+                                    format!(
+                                        "PLUGIN_EXTENSION_HOST_UNDECLARED_GATEWAY_HOOK: gateway hook {hook} is not declared by manifest"
+                                    ),
+                                ));
+                            }
+                            let globals = handler.ctx().globals();
+                            let registry: Object = globals.get("__aioGatewayHooks")?;
+                            registry.set(hook.as_str(), handler)
+                        },
+                    )
+                    .map_err(js_runtime_error)?;
+                    gateway.set("registerHook", register).map_err(js_runtime_error)?;
+                    api.set("gateway", gateway).map_err(js_runtime_error)?;
                 }
 
                 let host_calls_for_api = Arc::clone(&host_calls);
@@ -621,6 +668,76 @@ impl WorkerState {
         })
     }
 
+    fn execute_gateway_hook(&mut self, hook: &str, context: Value) -> Result<Value, WorkerError> {
+        if !self.declared_gateway_hooks.contains(hook) {
+            return Err(WorkerError::new(
+                "PLUGIN_EXTENSION_HOST_UNDECLARED_GATEWAY_HOOK",
+                format!("gateway hook {hook} is not declared by manifest"),
+            ));
+        }
+        if !self
+            .manifest
+            .capabilities
+            .iter()
+            .any(|capability| capability == "gateway.hooks")
+        {
+            return Err(WorkerError::new(
+                "PLUGIN_EXTENSION_HOST_FORBIDDEN",
+                "extension host API requires gateway.hooks",
+            ));
+        }
+        self.activate()?;
+        let context_json = serde_json::to_string(&context).map_err(|err| {
+            WorkerError::new(
+                "PLUGIN_EXTENSION_HOST_ENCODE_FAILED",
+                format!("failed to encode gateway hook context: {err}"),
+            )
+        })?;
+        let hook_name = hook.to_string();
+        self.with_js_deadline(|| {
+            self.context.with(|ctx| {
+                let globals = ctx.globals();
+                let registry: Object =
+                    globals.get("__aioGatewayHooks").map_err(js_runtime_error)?;
+                if !registry
+                    .contains_key(hook_name.as_str())
+                    .map_err(js_runtime_error)?
+                {
+                    return Err(WorkerError::new(
+                        "PLUGIN_EXTENSION_HOST_GATEWAY_HOOK_NOT_REGISTERED",
+                        format!("gateway hook {hook_name} was not registered during activation"),
+                    ));
+                }
+                let handler: Function =
+                    registry.get(hook_name.as_str()).map_err(js_runtime_error)?;
+                let parsed_context: JsValue = ctx
+                    .eval(format!("JSON.parse({})", json_string_literal(&context_json)).as_str())
+                    .map_err(js_runtime_error)?;
+                let result: JsValue = handler
+                    .call((parsed_context,))
+                    .catch(&ctx)
+                    .map_err(|err| self.js_caught_error(err))?;
+                let globals = ctx.globals();
+                let json_obj: Object = globals.get("JSON").map_err(js_runtime_error)?;
+                let stringify: Function = json_obj.get("stringify").map_err(js_runtime_error)?;
+                let json_result: Option<String> =
+                    stringify.call((result,)).map_err(js_runtime_error)?;
+                let Some(json_result) = json_result else {
+                    return Err(WorkerError::new(
+                        "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+                        "gateway hook result must be JSON serializable",
+                    ));
+                };
+                serde_json::from_str(&json_result).map_err(|err| {
+                    WorkerError::new(
+                        "PLUGIN_EXTENSION_HOST_DECODE_FAILED",
+                        format!("gateway hook result was not JSON serializable: {err}"),
+                    )
+                })
+            })
+        })
+    }
+
     fn with_js_deadline<T>(
         &self,
         f: impl FnOnce() -> Result<T, WorkerError>,
@@ -718,6 +835,18 @@ fn declared_commands(contributes: Option<&PluginContributes>) -> BTreeSet<String
                 .commands
                 .iter()
                 .map(|command| command.command.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn declared_gateway_hooks(contributes: Option<&PluginContributes>) -> BTreeSet<String> {
+    contributes
+        .map(|contributes| {
+            contributes
+                .gateway_hooks
+                .iter()
+                .map(|hook| hook.name.clone())
                 .collect()
         })
         .unwrap_or_default()

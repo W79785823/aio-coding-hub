@@ -261,18 +261,17 @@ fn load_gateway_plugin_pipeline(
     db: &db::Db,
 ) -> Arc<super::plugins::pipeline::GatewayPluginPipeline> {
     match plugin_service::enabled_plugins_for_gateway(db) {
-        Ok(plugins) if plugins.is_empty() => {
-            super::plugins::pipeline::GatewayPluginPipeline::empty_shared()
-        }
         Ok(plugins) => {
-            tracing::info!(
-                plugin_count = plugins.len(),
-                "loaded enabled gateway plugins"
-            );
+            if !plugins.is_empty() {
+                tracing::info!(
+                    plugin_count = plugins.len(),
+                    "loaded enabled gateway plugins"
+                );
+            }
             Arc::new(
                 super::plugins::pipeline::GatewayPluginPipeline::for_runtime(
                     plugins,
-                    Arc::new(RuntimeGatewayPluginExecutor::default()),
+                    Arc::new(RuntimeGatewayPluginExecutor::with_db(db.clone())),
                     super::plugins::pipeline::GatewayPluginPipelineConfig::default(),
                 ),
             )

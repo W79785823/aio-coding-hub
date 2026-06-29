@@ -4,6 +4,10 @@ use super::extension_host::ExtensionHostInstance;
 use crate::app::app_state::{ensure_db_ready, DbInitState};
 use crate::db;
 use crate::domain::plugins::{PluginDetail, PluginManifest, PluginRuntime};
+use crate::gateway::plugins::context::{
+    GatewayHookAction, GatewayHookResult, GatewayPluginHookName, GatewayVisibleHookContext,
+};
+use crate::gateway::plugins::permissions::GatewayPluginError;
 use crate::shared::error::{AppError, AppResult};
 use serde_json::{json, Value};
 use sha2::Digest;
@@ -59,6 +63,11 @@ trait ExtensionHostProcess: Send {
         command: &'a str,
         args: Value,
     ) -> BoxFuture<'a, AppResult<Value>>;
+    fn execute_gateway_hook<'a>(
+        &'a mut self,
+        hook: &'a str,
+        context: Value,
+    ) -> BoxFuture<'a, AppResult<Value>>;
     fn is_running(&mut self) -> bool;
     fn dispose<'a>(&'a mut self) -> BoxFuture<'a, ()>;
 }
@@ -107,6 +116,14 @@ impl ExtensionHostProcess for RealExtensionHostProcess {
         Box::pin(async move { self.host.execute_command(command, args).await })
     }
 
+    fn execute_gateway_hook<'a>(
+        &'a mut self,
+        hook: &'a str,
+        context: Value,
+    ) -> BoxFuture<'a, AppResult<Value>> {
+        Box::pin(async move { self.host.execute_gateway_hook(hook, context).await })
+    }
+
     fn is_running(&mut self) -> bool {
         self.host.is_running()
     }
@@ -142,6 +159,24 @@ impl ManagedExtensionHostInstance {
             return Ok(None);
         }
         let value = process.execute_command(command, args).await?;
+        *self
+            .last_used
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = now;
+        Ok(Some(value))
+    }
+
+    async fn execute_gateway_hook_if_running(
+        &self,
+        hook: &str,
+        context: Value,
+        now: Instant,
+    ) -> AppResult<Option<Value>> {
+        let mut process = self.process.lock().await;
+        if !process.is_running() {
+            return Ok(None);
+        }
+        let value = process.execute_gateway_hook(hook, context).await?;
         *self
             .last_used
             .lock()
@@ -262,6 +297,79 @@ impl ExtensionHostInstanceRegistry {
         })
     }
 
+    pub(crate) async fn execute_gateway_hook(
+        &self,
+        detail: PluginDetail,
+        hook: &str,
+        context: GatewayVisibleHookContext,
+    ) -> Result<GatewayHookResult, GatewayPluginError> {
+        self.execute_gateway_hook_with_now(detail, hook, context, Instant::now())
+            .await
+    }
+
+    async fn execute_gateway_hook_with_now(
+        &self,
+        detail: PluginDetail,
+        hook: &str,
+        context: GatewayVisibleHookContext,
+        now: Instant,
+    ) -> Result<GatewayHookResult, GatewayPluginError> {
+        let context_value = serde_json::to_value(&context).map_err(|err| {
+            GatewayPluginError::new(
+                "PLUGIN_EXTENSION_HOST_INVALID_CONTEXT",
+                format!("failed to encode extension host gateway context: {err}"),
+            )
+        })?;
+        let _operation_guard = self.operation_gate.read().await;
+        let key = ExtensionHostInstanceKey::from_plugin_detail(&detail)
+            .map_err(extension_host_gateway_error)?;
+        let plugin_lock = self.plugin_lock_for(&key.plugin_id).await;
+        let _plugin_guard = plugin_lock.lock().await;
+
+        if let Some(value) = self
+            .execute_gateway_hook_warm_instance(&key, hook, context_value.clone(), now)
+            .await
+            .map_err(extension_host_gateway_error)?
+        {
+            return gateway_hook_result_from_extension_host_output(hook, &context, value);
+        }
+
+        let mut disposals = {
+            let mut instances = self.instances.lock().await;
+            let mut disposals = remove_same_plugin_with_different_key(&mut instances, &key);
+            disposals.extend(remove_idle_locked(
+                &mut instances,
+                self.limits.idle_recycle,
+                now,
+            ));
+            disposals
+        };
+        dispose_instances(disposals.drain(..)).await;
+
+        let mut process = self
+            .factory
+            .start(detail, self.db.clone())
+            .await
+            .map_err(extension_host_gateway_error)?;
+        let value = match process.execute_gateway_hook(hook, context_value).await {
+            Ok(value) => value,
+            Err(error) => {
+                process.dispose().await;
+                return Err(extension_host_gateway_error(error));
+            }
+        };
+        let result = gateway_hook_result_from_extension_host_output(hook, &context, value)?;
+        let instance = Arc::new(ManagedExtensionHostInstance::new(process, now));
+        let disposals = {
+            let mut instances = self.instances.lock().await;
+            instances.insert(key, instance);
+            remove_lru_over_limit_locked(&mut instances, self.limits.max_warm_instances)
+        };
+        dispose_instances(disposals).await;
+
+        Ok(result)
+    }
+
     #[allow(dead_code)]
     pub(crate) async fn dispose_plugin(&self, plugin_id: &str) {
         let _operation_guard = self.operation_gate.read().await;
@@ -344,6 +452,40 @@ impl ExtensionHostInstanceRegistry {
         };
 
         match instance.execute_if_running(command, args, now).await? {
+            Some(value) => Ok(Some(value)),
+            None => {
+                let removed = {
+                    let mut instances = self.instances.lock().await;
+                    let should_remove = instances
+                        .get(key)
+                        .filter(|current| Arc::ptr_eq(current, &instance))
+                        .is_some();
+                    should_remove.then(|| instances.remove(key)).flatten()
+                };
+                if let Some(instance) = removed {
+                    instance.dispose().await;
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    async fn execute_gateway_hook_warm_instance(
+        &self,
+        key: &ExtensionHostInstanceKey,
+        hook: &str,
+        context: Value,
+        now: Instant,
+    ) -> AppResult<Option<Value>> {
+        let instance = { self.instances.lock().await.get(key).cloned() };
+        let Some(instance) = instance else {
+            return Ok(None);
+        };
+
+        match instance
+            .execute_gateway_hook_if_running(hook, context, now)
+            .await?
+        {
             Some(value) => Ok(Some(value)),
             None => {
                 let removed = {
@@ -552,6 +694,218 @@ fn contribution_hash(manifest: &PluginManifest) -> String {
     format!("{:x}", sha2::Sha256::digest(bytes))
 }
 
+fn extension_host_gateway_error(err: AppError) -> GatewayPluginError {
+    match err.code() {
+        "PLUGIN_EXTENSION_HOST_FORBIDDEN" => GatewayPluginError::new(
+            "PLUGIN_PERMISSION_DENIED",
+            format!("extension host gateway hook permission denied: {err}"),
+        ),
+        "PLUGIN_EXTENSION_CALL_TIMEOUT" => GatewayPluginError::new(
+            "PLUGIN_EXTENSION_HOST_TIMEOUT",
+            format!("extension host gateway hook timed out: {err}"),
+        ),
+        "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT" | "PLUGIN_EXTENSION_HOST_DECODE_FAILED" => {
+            GatewayPluginError::new(
+                "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+                format!("extension host gateway hook returned invalid output: {err}"),
+            )
+        }
+        _ => GatewayPluginError::new(
+            "PLUGIN_EXTENSION_HOST_GATEWAY_FAILED",
+            format!("extension host gateway hook failed: {err}"),
+        ),
+    }
+}
+
+fn gateway_hook_result_from_extension_host_output(
+    hook: &str,
+    context: &GatewayVisibleHookContext,
+    value: Value,
+) -> Result<GatewayHookResult, GatewayPluginError> {
+    let object = value.as_object().ok_or_else(|| {
+        GatewayPluginError::new(
+            "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+            "extension host gateway hook output must be a JSON object",
+        )
+    })?;
+    if object.contains_key("contextPatch") {
+        return Err(GatewayPluginError::new(
+            "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+            "extension host gateway hook output used legacy contextPatch; use requestBody, responseBody, streamChunk, logMessage, or headers",
+        ));
+    }
+    let action = object
+        .get("action")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            GatewayPluginError::new(
+                "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+                "extension host gateway hook output must include string action",
+            )
+        })?;
+    let mut result = GatewayHookResult::continue_unchanged();
+    match action {
+        "continue" | "pass" => {}
+        "warn" => {
+            result.reason = Some(required_string(object, "message", "warn action")?);
+        }
+        "block" => {
+            if hook_kind(hook) == Some(crate::gateway::plugins::contract::HookKind::Log) {
+                return Err(GatewayPluginError::new(
+                    "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+                    format!("block action is not allowed in {hook}"),
+                ));
+            }
+            result.action = GatewayHookAction::Block;
+            result.reason = optional_string(object, "reason")?;
+        }
+        "replace" => {
+            result.request_body = optional_string(object, "requestBody")?;
+            result.response_body = optional_string(object, "responseBody")?;
+            result.stream_chunk = optional_string(object, "streamChunk")?;
+            result.log_message = optional_string(object, "logMessage")?;
+            result.headers = optional_string_map(object, "headers")?.unwrap_or_default();
+        }
+        "appendMessage" => {
+            result.request_body = Some(append_message_request_body(hook, context, object)?);
+        }
+        other => {
+            return Err(GatewayPluginError::new(
+                "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+                format!("unsupported extension host gateway action: {other}"),
+            ));
+        }
+    }
+    Ok(result)
+}
+
+fn hook_kind(hook: &str) -> Option<crate::gateway::plugins::contract::HookKind> {
+    let hook_name = GatewayPluginHookName::from_str(hook)?;
+    crate::gateway::plugins::registry::HookRegistry::new()
+        .descriptor(hook_name)
+        .map(|descriptor| descriptor.kind)
+}
+
+fn append_message_request_body(
+    hook: &str,
+    context: &GatewayVisibleHookContext,
+    object: &serde_json::Map<String, Value>,
+) -> Result<String, GatewayPluginError> {
+    let hook_name = GatewayPluginHookName::from_str(hook).ok_or_else(|| {
+        GatewayPluginError::new(
+            "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+            format!("unknown gateway hook for appendMessage action: {hook}"),
+        )
+    })?;
+    if !hook_name.is_request_hook() {
+        return Err(GatewayPluginError::new(
+            "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+            format!("appendMessage action is only allowed in request hooks: {hook}"),
+        ));
+    }
+    let role = required_string(object, "role", "appendMessage action")?;
+    if role != "system" && role != "developer" {
+        return Err(GatewayPluginError::new(
+            "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+            "appendMessage role must be system or developer",
+        ));
+    }
+    let content = required_string(object, "content", "appendMessage action")?;
+    if content.trim().is_empty() {
+        return Err(GatewayPluginError::new(
+            "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+            "appendMessage content must not be empty",
+        ));
+    }
+    let body = context.request.body.as_deref().ok_or_else(|| {
+        GatewayPluginError::new(
+            "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+            "appendMessage requires visible request body",
+        )
+    })?;
+    let mut root: Value = serde_json::from_str(body).map_err(|err| {
+        GatewayPluginError::new(
+            "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+            format!("appendMessage request body must be JSON: {err}"),
+        )
+    })?;
+    let messages = root
+        .get_mut("messages")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| {
+            GatewayPluginError::new(
+                "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+                "appendMessage requires request body messages array",
+            )
+        })?;
+    messages.push(json!({
+        "role": role,
+        "content": content,
+    }));
+    serde_json::to_string(&root).map_err(|err| {
+        GatewayPluginError::new(
+            "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+            format!("failed to encode appendMessage request body: {err}"),
+        )
+    })
+}
+
+fn required_string(
+    object: &serde_json::Map<String, Value>,
+    key: &'static str,
+    action: &'static str,
+) -> Result<String, GatewayPluginError> {
+    optional_string(object, key)?.ok_or_else(|| {
+        GatewayPluginError::new(
+            "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+            format!("{action} requires string {key}"),
+        )
+    })
+}
+
+fn optional_string(
+    object: &serde_json::Map<String, Value>,
+    key: &'static str,
+) -> Result<Option<String>, GatewayPluginError> {
+    match object.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(GatewayPluginError::new(
+            "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+            format!("extension host gateway output field {key} must be a string"),
+        )),
+    }
+}
+
+fn optional_string_map(
+    object: &serde_json::Map<String, Value>,
+    key: &'static str,
+) -> Result<Option<BTreeMap<String, String>>, GatewayPluginError> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(map) = value.as_object() else {
+        return Err(GatewayPluginError::new(
+            "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+            format!("extension host gateway output field {key} must be an object"),
+        ));
+    };
+    let mut out = BTreeMap::new();
+    for (name, value) in map {
+        let Some(header_value) = value.as_str() else {
+            return Err(GatewayPluginError::new(
+                "PLUGIN_EXTENSION_HOST_INVALID_OUTPUT",
+                format!("extension host gateway output header {name} must be a string"),
+            ));
+        };
+        out.insert(name.clone(), header_value.to_string());
+    }
+    Ok(Some(out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,6 +1035,21 @@ mod tests {
             })
         }
 
+        fn execute_gateway_hook<'a>(
+            &'a mut self,
+            hook: &'a str,
+            context: Value,
+        ) -> BoxFuture<'a, AppResult<Value>> {
+            Box::pin(async move {
+                self.state.lock().unwrap().executions.push(self.id);
+                Ok(json!({
+                    "action": "continue",
+                    "hook": hook,
+                    "context": context,
+                }))
+            })
+        }
+
         fn is_running(&mut self) -> bool {
             self.running
         }
@@ -733,6 +1102,20 @@ mod tests {
                 Ok(json!({
                     "pluginId": self.plugin_id,
                     "command": command,
+                }))
+            })
+        }
+
+        fn execute_gateway_hook<'a>(
+            &'a mut self,
+            hook: &'a str,
+            _context: Value,
+        ) -> BoxFuture<'a, AppResult<Value>> {
+            Box::pin(async move {
+                Ok(json!({
+                    "action": "continue",
+                    "pluginId": self.plugin_id,
+                    "hook": hook,
                 }))
             })
         }

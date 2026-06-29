@@ -22,6 +22,7 @@ use std::time::Duration;
 
 const DEFAULT_EXTENSION_HOST_START_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_EXTENSION_HOST_CALL_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_EXTENSION_HOST_GATEWAY_TIMEOUT: Duration = Duration::from_millis(150);
 const DEFAULT_EXTENSION_HOST_IDLE_RECYCLE: Duration = Duration::from_secs(30);
 const PLUGIN_STORAGE_MAX_BYTES: usize = 64 * 1024;
 
@@ -185,6 +186,42 @@ impl ExtensionHostInstance {
             )
             .await
             .map_err(map_process_error)
+    }
+
+    pub(crate) async fn execute_gateway_hook(
+        &mut self,
+        hook: &str,
+        context: Value,
+    ) -> AppResult<Value> {
+        if !self
+            .manifest
+            .capabilities
+            .iter()
+            .any(|capability| capability == "gateway.hooks")
+        {
+            return Err(AppError::new(
+                "PLUGIN_EXTENSION_HOST_FORBIDDEN",
+                "extension host API requires gateway.hooks",
+            ));
+        }
+        self.activate().await?;
+        let call = self.runtime.call_method(
+            "gatewayHooks.execute",
+            json!({
+                "hook": hook,
+                "context": context,
+            }),
+        );
+        match tokio::time::timeout(DEFAULT_EXTENSION_HOST_GATEWAY_TIMEOUT, call).await {
+            Ok(result) => result.map_err(map_process_error),
+            Err(_) => {
+                self.runtime.shutdown().await;
+                Err(AppError::new(
+                    "PLUGIN_EXTENSION_CALL_TIMEOUT",
+                    "extension host gateway hook did not respond before timeout",
+                ))
+            }
+        }
     }
 
     #[cfg(test)]
@@ -547,6 +584,41 @@ mod tests {
         extension_js: &str,
         capabilities: &[&str],
     ) {
+        write_extension_plugin_with_manifest_overrides(
+            root,
+            extension_js,
+            capabilities,
+            serde_json::json!({
+                "commands": [
+                    { "command": "acme.echo", "title": "Echo" },
+                    { "command": "acme.never", "title": "Never" }
+                ]
+            }),
+            vec!["onCommand:acme.echo", "onCommand:acme.never"],
+        );
+    }
+
+    fn write_gateway_extension_plugin(root: &Path, extension_js: &str, hook_name: &str) {
+        write_extension_plugin_with_manifest_overrides(
+            root,
+            extension_js,
+            &["gateway.hooks"],
+            serde_json::json!({
+                "gatewayHooks": [
+                    { "name": hook_name, "priority": 10, "failurePolicy": "fail-open" }
+                ]
+            }),
+            Vec::new(),
+        );
+    }
+
+    fn write_extension_plugin_with_manifest_overrides(
+        root: &Path,
+        extension_js: &str,
+        capabilities: &[&str],
+        contributes: serde_json::Value,
+        activation_events: Vec<&str>,
+    ) {
         std::fs::create_dir_all(root.join("dist")).expect("create dist");
         let manifest = json!({
             "id": "acme.echo",
@@ -555,13 +627,8 @@ mod tests {
             "apiVersion": "1.0.0",
             "runtime": { "kind": "extensionHost", "language": "typescript" },
             "main": "dist/extension.js",
-            "activationEvents": ["onCommand:acme.echo", "onCommand:acme.never"],
-            "contributes": {
-                "commands": [
-                    { "command": "acme.echo", "title": "Echo" },
-                    { "command": "acme.never", "title": "Never" }
-                ]
-            },
+            "activationEvents": activation_events,
+            "contributes": contributes,
             "capabilities": capabilities,
             "hostCompatibility": { "app": ">=0.60.0", "pluginApi": "^1.0.0" }
         });
@@ -619,6 +686,75 @@ mod tests {
         assert!(host.is_running());
         host.dispose().await;
         assert!(!host.is_running());
+    }
+
+    #[tokio::test]
+    async fn extension_host_executes_gateway_hook() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_gateway_extension_plugin(
+            temp.path(),
+            r#"
+            module.exports.activate = function(api) {
+              api.gateway.registerHook("gateway.request.afterBodyRead", function(context) {
+                return {
+                  action: "replace",
+                  requestBody: context.request.body.replace("hello", "hi")
+                };
+              });
+            };
+            "#,
+            "gateway.request.afterBodyRead",
+        );
+
+        let mut host = super::ExtensionHost::start_for_tests(temp.path())
+            .await
+            .expect("start extension host");
+
+        let result = host
+            .execute_gateway_hook(
+                "gateway.request.afterBodyRead",
+                json!({
+                    "hookName": "gateway.request.afterBodyRead",
+                    "traceId": "trace-gateway",
+                    "request": { "body": "hello" },
+                    "response": {},
+                    "stream": {},
+                    "log": {}
+                }),
+            )
+            .await
+            .expect("execute gateway hook");
+
+        assert_eq!(result, json!({ "action": "replace", "requestBody": "hi" }));
+        host.dispose().await;
+    }
+
+    #[tokio::test]
+    async fn extension_host_gateway_hook_registration_requires_manifest_declaration() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_gateway_extension_plugin(
+            temp.path(),
+            r#"
+            module.exports.activate = function(api) {
+              api.gateway.registerHook("gateway.response.after", function() {
+                return { action: "continue" };
+              });
+            };
+            "#,
+            "gateway.request.afterBodyRead",
+        );
+
+        let mut host = super::ExtensionHost::start_for_tests(temp.path())
+            .await
+            .expect("start extension host");
+
+        let err = host
+            .execute_gateway_hook("gateway.request.afterBodyRead", json!({}))
+            .await
+            .expect_err("undeclared gateway hook registration should fail activation");
+
+        assert_eq!(err.code(), "PLUGIN_EXTENSION_HOST_UNDECLARED_GATEWAY_HOOK");
+        host.dispose().await;
     }
 
     #[tokio::test]
