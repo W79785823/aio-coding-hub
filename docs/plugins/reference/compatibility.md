@@ -24,7 +24,7 @@ Extension Host is the only community runtime. Third-party JavaScript runs only i
 
 ## 0.62.1 Developer Loop Boundary
 
-0.62.1 does not change Plugin API v1. `doctor`, `validate --strict`, and `replay --explain` are developer tooling around the same manifest and hook contract.
+0.62.1 does not change Plugin API v1. `doctor`, `validate --strict`, `pack`, and `publish-check` are developer tooling around the same manifest and package contract. Extension Host hook behavior is verified through host runtime reports and exported replay fixtures, not local `create-aio-plugin replay` execution.
 
 Provider behavior remains host-owned. Provider ordering, failover, OAuth limits, token counting, cx2cc translation, and session binding are covered by internal acceptance tests, but no Provider Plugin API is exposed.
 

@@ -13,6 +13,6 @@
 | `examples/redactor` | `example:redactor` | 展示 Extension Host gateway hook 脱敏形态 | `gateway.request.beforeSend`, `log.beforePersist` | `gateway.hooks` | 包含 request hit/miss 和 log redact fixtures；覆盖 pack、publish-check 和市场安装元数据 |
 | `examples/response-guard` | `example:response-guard` | 在 non-stream 响应返回后做轻量检查或标记 | `gateway.response.after` | `gateway.hooks` | 包含 `fixtures/response-warn.json` 和 `fixtures/response-pass.json`；覆盖响应 mutation 和 pass 路径 |
 
-`examples/*` 是开发模板，不是默认可安装市场包。生成出的目录可以运行 `validate --strict`、`replay --explain`、`pack` 和 `publish-check`；发布为真实 `.aio-plugin` artifact 仍需要单独的 checksum、signature、托管和市场索引流程。
+`examples/*` 是开发模板，不是默认可安装市场包。生成出的目录可以运行 `validate --strict`、`pack` 和 `publish-check`；Extension Host hook 行为要通过宿主运行报告、导出的 replay fixture 和桌面应用内复测确认。发布为真实 `.aio-plugin` artifact 仍需要单独的 checksum、signature、托管和市场索引流程。
 
 这些示例都保持在 Plugin API v1 范围内。宿主负责运行诊断、fixture 导出、安装校验和市场索引解析；插件只声明 `main`、Extension Host runtime、contributions、capabilities 和自己的打包输出。

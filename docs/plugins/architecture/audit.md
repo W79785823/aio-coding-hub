@@ -94,7 +94,7 @@ Bundled official plugin：
 - Provider-neutral request context 通过 `request.normalizedMessages` 提供。
 - Plugin refresh 时会清理 runtime caches。
 - Plugin hot-path performance smoke tests 是 release readiness 的一部分。
-- `create-aio-plugin replay` 与 Extension Host gateway hook fixture model 保持一致。
+- `create-aio-plugin replay` 当前不执行 Extension Host gateway hooks；fixture model 由宿主 `plugin_export_replay_fixture` 和运行报告保持一致。
 
 ## 0.62 Platform Kernel Decision
 

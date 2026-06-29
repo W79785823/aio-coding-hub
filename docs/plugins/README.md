@@ -41,8 +41,8 @@
 3. 在 `dist/extension.js` 中用 SDK 形状实现 `activate(api)`，例如 `api.gateway.registerHook`。
 4. 准备 Claude 和 Codex/OpenAI Responses fixture。
 5. 使用 `create-aio-plugin` 校验真实插件目录。
-6. 在导入桌面应用前，用 replay fixture 覆盖目标 hook。
-7. 本地行为稳定后再打包 `.aio-plugin`，需要可信分发时再补签名。
+6. 在桌面应用中启用插件后，用宿主运行报告和导出的 replay fixture 覆盖目标 hook。
+7. 行为稳定后再打包 `.aio-plugin`，需要可信分发时再补签名。
 
 ## 当前稳定性说明
 

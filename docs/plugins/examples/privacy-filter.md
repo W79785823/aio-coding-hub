@@ -64,7 +64,7 @@ Official privacy filter rules are loaded under a 1 MiB host byte budget。社区
 - 一个 minimal manifest。
 - 一个 Claude messages fixture。
 - 一个 Codex/OpenAI Responses input fixture。
-- 一个 local replay command。
+- 一个 host replay/export 验证说明。
 - 一个 package command。
 - 精确列出它依赖的 capabilities，以及官方 runtime 使用的内部 context/mutation labels。
 - 简短说明哪些行为是 intentionally unsupported。

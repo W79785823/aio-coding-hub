@@ -99,6 +99,7 @@ for (const [doc, phrases] of Object.entries({
     "`main` 指向打包后的 JavaScript 输出",
     "`contributes.gatewayHooks`",
     "`api.gateway.registerHook`",
+    "PLUGIN_REPLAY_UNSUPPORTED",
   ],
   "docs/plugins/plugin-api-v1-contract.json": [
     "\"communityRuntimes\": [",
@@ -121,6 +122,7 @@ for (const [doc, phrases] of Object.entries({
     "`declarativeRules` 是默认社区运行时",
     "WASM 执行受宿主策略控制",
     "`plugin.wasm`",
+    "pnpm --filter create-aio-plugin cli replay",
   ],
   "docs/plugin-manifest-v1.md": [
     '"kind": "declarativeRules"',

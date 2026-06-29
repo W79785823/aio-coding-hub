@@ -66,8 +66,10 @@ module.exports.activate = function(api) {
 
 ```bash
 pnpm --filter create-aio-plugin cli validate --strict ./acme.redactor
-pnpm --filter create-aio-plugin cli replay --explain ./acme.redactor ./fixtures/claude-request.json gateway.request.afterBodyRead
 pnpm --filter create-aio-plugin cli pack ./acme.redactor
+pnpm --filter create-aio-plugin cli publish-check ./acme.redactor
 ```
+
+`create-aio-plugin replay` 当前不在本地执行 Extension Host gateway hooks；迁移后的 hook 行为应在宿主中启用插件后，通过 `plugin_hook_execution_reports`、`plugin_export_replay_fixture` 和桌面应用内复测确认。
 
 如果旧包无法启用，优先查看 `PLUGIN_UNSUPPORTED_RUNTIME`、`PLUGIN_INVALID_MANIFEST` 或 `PLUGIN_INVALID_CONTRIBUTION`。这些错误表示包仍包含 pre-release legacy runtime 字段，需要按上面的 Extension Host 形态迁移。

@@ -50,9 +50,11 @@ TypeScript SDK 导出：
 ```bash
 pnpm --filter create-aio-plugin cli doctor ./acme.redactor
 pnpm --filter create-aio-plugin cli validate --strict ./acme.redactor
-pnpm --filter create-aio-plugin cli replay --explain ./acme.redactor ./fixtures/request.json gateway.request.afterBodyRead
 pnpm --filter create-aio-plugin cli pack ./acme.redactor
+pnpm --filter create-aio-plugin cli publish-check ./acme.redactor
 ```
+
+`create-aio-plugin replay` 当前不在本地执行 Extension Host gateway hooks；hook 行为应通过宿主 `plugin_hook_execution_reports`、`plugin_export_replay_fixture` 和桌面应用内复测确认。
 
 开发工具的诊断对象使用稳定 shape，便于 CLI、GUI 和测试共享：
 
