@@ -722,16 +722,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extension_host_commands_api_requires_commands_execute_before_command_runs() {
+    async fn extension_host_command_dispatch_requires_commands_execute_even_if_registry_is_mutated()
+    {
         let temp = tempfile::tempdir().expect("tempdir");
         write_extension_plugin_with_capabilities(
             temp.path(),
             r#"
-            module.exports.activate = function(api) {
-              api.commands.registerCommand("acme.echo", function() {
+            globalThis.__aioCommands["acme.echo"] = function() {
                 return { executed: true };
-              });
             };
+            module.exports.activate = function() {};
             "#,
             &[],
         );
@@ -745,7 +745,7 @@ mod tests {
             .await
             .expect_err("missing commands capability should fail before command execution");
 
-        assert_eq!(err.code(), "PLUGIN_EXTENSION_HOST_JS_ERROR");
+        assert_eq!(err.code(), "PLUGIN_EXTENSION_HOST_FORBIDDEN");
         host.dispose().await;
     }
 

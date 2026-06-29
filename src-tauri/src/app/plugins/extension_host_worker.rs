@@ -561,6 +561,17 @@ impl WorkerState {
                 format!("command {command} is not declared by manifest"),
             ));
         }
+        if !self
+            .manifest
+            .capabilities
+            .iter()
+            .any(|capability| capability == "commands.execute")
+        {
+            return Err(WorkerError::new(
+                "PLUGIN_EXTENSION_HOST_FORBIDDEN",
+                "extension host API requires commands.execute",
+            ));
+        }
         self.activate()?;
         let args_json = serde_json::to_string(&args).map_err(|err| {
             WorkerError::new(
@@ -955,23 +966,28 @@ fn js_runtime_error(err: rquickjs::Error) -> WorkerError {
 
 fn split_error_code(raw: &str) -> Option<(&str, String)> {
     let message = raw.trim();
-    if let Some(start) = message.find("PLUGIN_EXTENSION_HOST_") {
+    if let Some(start) = message.find("PLUGIN_") {
         let code_and_rest = &message[start..];
         let (code, rest) = code_and_rest.trim().split_once(':')?;
         let code = code.trim();
-        if code.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_') {
+        if is_plugin_error_code(code) {
             return Some((code, rest.trim().to_string()));
         }
     }
     let (_prefix, code_and_rest) = message.split_once(':').unwrap_or(("", message));
     let (code, rest) = code_and_rest.trim().split_once(':')?;
     let code = code.trim();
-    if code.starts_with("PLUGIN_EXTENSION_HOST_")
-        && code.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_')
-    {
+    if is_plugin_error_code(code) {
         return Some((code, rest.trim().to_string()));
     }
     None
+}
+
+fn is_plugin_error_code(code: &str) -> bool {
+    code.starts_with("PLUGIN_")
+        && code
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
 }
 
 fn write_error(err: io::Error) -> WorkerError {
