@@ -86,7 +86,6 @@ function renderCard(
     provider,
     circuit: null,
     circuitResetting: false,
-    onToggleEnabled: vi.fn(),
     onResetCircuit: vi.fn(),
     onEdit: vi.fn(),
     onDelete: vi.fn(),
@@ -131,6 +130,13 @@ describe("pages/providers/SortableProviderCard", () => {
     expect(trailingAction).toHaveClass("w-full");
     expect(trailingAction.closest('[data-provider-card-management-actions="true"]')).toBeNull();
     expect(trailingAction.closest('[data-provider-card-secondary-actions="true"]')).toBeNull();
+  });
+
+  it("does not render the provider enabled switch on the resource-pool card", () => {
+    renderCard({ enabled: false });
+
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    expect(screen.queryByText("已关闭")).not.toBeInTheDocument();
   });
 
   it("renders OAuth badge with email", () => {

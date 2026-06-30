@@ -31,7 +31,6 @@ import { openDesktopUrl } from "../../services/desktop/opener";
 import { Button } from "../../ui/Button";
 import { Card } from "../../ui/Card";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
-import { Switch } from "../../ui/Switch";
 import { useNowUnix } from "../../hooks/useNowUnix";
 import { cn } from "../../utils/cn";
 import { formatCountdownSeconds, formatUnixSeconds, formatUsdRaw } from "../../utils/formatters";
@@ -138,7 +137,6 @@ export type SortableProviderCardProps = {
   trailing?: ReactNode;
   circuit: GatewayProviderCircuitStatus | null;
   circuitResetting: boolean;
-  onToggleEnabled: (provider: ProviderSummary) => void;
   onResetCircuit: (provider: ProviderSummary) => void;
   onCopyTerminalLaunchCommand?: (provider: ProviderSummary) => void;
   terminalLaunchCopying?: boolean;
@@ -162,7 +160,6 @@ export const ProviderCard = memo(function ProviderCard({
   trailing = null,
   circuit,
   circuitResetting,
-  onToggleEnabled,
   onResetCircuit,
   onCopyTerminalLaunchCommand,
   terminalLaunchCopying = false,
@@ -491,16 +488,6 @@ export const ProviderCard = memo(function ProviderCard({
                 <Pencil className="h-4 w-4" />
                 编辑
               </Button>
-
-              <div className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-sm shadow-sm dark:border-border dark:bg-secondary">
-                <span className="text-sm font-medium text-secondary-foreground">
-                  {provider.enabled ? "已启用" : "已关闭"}
-                </span>
-                <Switch
-                  checked={provider.enabled}
-                  onCheckedChange={() => onToggleEnabled(provider)}
-                />
-              </div>
             </div>
 
             <div
