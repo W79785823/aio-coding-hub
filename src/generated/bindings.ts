@@ -1471,10 +1471,7 @@ export const commands = {
     input: PluginInstallRemoteInput
   ): Promise<Result<PluginUpdateDiff, string>> {
     try {
-      return {
-        status: "ok",
-        data: await TAURI_INVOKE("plugin_preview_remote_update", { input }),
-      };
+      return { status: "ok", data: await TAURI_INVOKE("plugin_preview_remote_update", { input }) };
     } catch (e) {
       if (e instanceof Error) throw e;
       else return { status: "error", error: e as any };
