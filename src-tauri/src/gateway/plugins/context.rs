@@ -5,7 +5,6 @@ use axum::http::{HeaderMap, Method};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub(crate) const DEFAULT_PLUGIN_CONTEXT_BODY_BYTES: usize = 256 * 1024;
 pub(crate) const DEFAULT_PLUGIN_CONTEXT_STREAM_BYTES: usize = 64 * 1024;
 pub(crate) const DEFAULT_PLUGIN_CONTEXT_LOG_BYTES: usize = 64 * 1024;
 pub(crate) const DEFAULT_PLUGIN_NORMALIZED_MESSAGE_LIMIT: usize = 64;
@@ -23,7 +22,7 @@ pub(crate) struct GatewayPluginContextBudget {
 impl Default for GatewayPluginContextBudget {
     fn default() -> Self {
         Self {
-            body_bytes: DEFAULT_PLUGIN_CONTEXT_BODY_BYTES,
+            body_bytes: crate::gateway::util::max_request_body_bytes(),
             stream_bytes: DEFAULT_PLUGIN_CONTEXT_STREAM_BYTES,
             log_bytes: DEFAULT_PLUGIN_CONTEXT_LOG_BYTES,
             normalized_messages: DEFAULT_PLUGIN_NORMALIZED_MESSAGE_LIMIT,

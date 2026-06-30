@@ -1,7 +1,7 @@
 //! Usage: Parent-side extension host worker lifecycle and command dispatch.
 
 use super::extension_host_worker::{
-    ExtensionHostWorkerConfig, DEFAULT_EXTENSION_HOST_MAX_LINE_BYTES,
+    default_extension_host_max_line_bytes, ExtensionHostWorkerConfig,
 };
 use super::privacy_redaction_service::PrivacyRedactionService;
 use super::process_runtime::{
@@ -22,8 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const DEFAULT_EXTENSION_HOST_START_TIMEOUT: Duration = Duration::from_secs(5);
-const DEFAULT_EXTENSION_HOST_CALL_TIMEOUT: Duration = Duration::from_secs(30);
-const DEFAULT_EXTENSION_HOST_GATEWAY_TIMEOUT: Duration = Duration::from_millis(150);
+pub(crate) const DEFAULT_EXTENSION_HOST_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_EXTENSION_HOST_IDLE_RECYCLE: Duration = Duration::from_secs(30);
 const PLUGIN_STORAGE_MAX_BYTES: usize = 64 * 1024;
 
@@ -134,13 +133,14 @@ impl ExtensionHostInstance {
             "--extension-host-config".to_string(),
             config_file.path().display().to_string(),
         ];
+        let max_line_bytes = default_extension_host_max_line_bytes();
         let runtime = JsonRpcProcessRuntime::start(ProcessRuntimeConfig {
             program: program.display().to_string(),
             args,
             start_timeout: DEFAULT_EXTENSION_HOST_START_TIMEOUT,
             hook_timeout: call_timeout,
             idle_recycle: DEFAULT_EXTENSION_HOST_IDLE_RECYCLE,
-            max_line_bytes: DEFAULT_EXTENSION_HOST_MAX_LINE_BYTES,
+            max_line_bytes,
             ready_method: "extension.ready".to_string(),
             allow_startup_noise: cfg!(test),
             host_handler,
@@ -224,29 +224,17 @@ impl ExtensionHostInstance {
                 "extension host API requires gateway.hooks",
             ));
         }
-        let call = async {
-            self.activate().await?;
-            self.runtime
-                .call_method(
-                    "gatewayHooks.execute",
-                    json!({
-                        "hook": hook,
-                        "context": context,
-                    }),
-                )
-                .await
-                .map_err(map_process_error)
-        };
-        match tokio::time::timeout(DEFAULT_EXTENSION_HOST_GATEWAY_TIMEOUT, call).await {
-            Ok(result) => result,
-            Err(_) => {
-                self.runtime.shutdown().await;
-                Err(AppError::new(
-                    "PLUGIN_EXTENSION_CALL_TIMEOUT",
-                    "extension host gateway hook did not respond before timeout",
-                ))
-            }
-        }
+        self.activate().await?;
+        self.runtime
+            .call_method(
+                "gatewayHooks.execute",
+                json!({
+                    "hook": hook,
+                    "context": context,
+                }),
+            )
+            .await
+            .map_err(map_process_error)
     }
 
     #[cfg(test)]
@@ -545,7 +533,7 @@ fn write_worker_config(
     let config = ExtensionHostWorkerConfig {
         plugin_root: plugin_root.to_path_buf(),
         contribution_hash: Some(contribution_hash),
-        max_line_bytes: DEFAULT_EXTENSION_HOST_MAX_LINE_BYTES,
+        max_line_bytes: default_extension_host_max_line_bytes(),
         js_timeout_ms: call_timeout.as_millis().try_into().unwrap_or(u64::MAX),
     };
     let mut nonce = [0_u8; 8];
@@ -839,7 +827,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extension_host_gateway_hook_timeout_covers_activation() {
+    async fn extension_host_gateway_hook_call_timeout_covers_activation() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_gateway_extension_plugin(
             temp.path(),
@@ -851,9 +839,12 @@ mod tests {
             "gateway.request.afterBodyRead",
         );
 
-        let mut host = super::ExtensionHost::start_for_tests(temp.path())
-            .await
-            .expect("start extension host");
+        let mut host = super::ExtensionHost::start_for_tests_with_timeout(
+            temp.path(),
+            Duration::from_millis(50),
+        )
+        .await
+        .expect("start extension host");
 
         let started = std::time::Instant::now();
         let err = host

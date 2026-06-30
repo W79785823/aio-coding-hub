@@ -118,7 +118,7 @@ function detail(overrides: Partial<PluginDetail> = {}): PluginDetail {
   };
 }
 
-function officialPrivacyFilterDetail(): PluginDetail {
+function officialPrivacyFilterDetail(overrides: Partial<PluginDetail> = {}): PluginDetail {
   return detail({
     summary: summary({
       plugin_id: "official.privacy-filter",
@@ -149,6 +149,7 @@ function officialPrivacyFilterDetail(): PluginDetail {
     },
     install_source: "official",
     granted_permissions: ["request.body.read", "request.body.write", "log.redact"],
+    ...overrides,
   });
 }
 
@@ -487,5 +488,38 @@ describe("query/plugins", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: pluginContributionKeys.active(),
     });
+  });
+
+  it("updates the list cache with the returned summary after enabling a plugin", async () => {
+    const client = createTestQueryClient();
+    client.setQueryData<PluginSummary[]>(pluginKeys.list(), [
+      summary({
+        plugin_id: "official.privacy-filter",
+        name: "Privacy Filter",
+        status: "installed",
+      }),
+    ]);
+    vi.mocked(pluginEnable).mockResolvedValue(
+      officialPrivacyFilterDetail({
+        summary: summary({
+          plugin_id: "official.privacy-filter",
+          name: "Privacy Filter",
+          status: "enabled",
+        }),
+      })
+    );
+    const wrapper = createQueryWrapper(client);
+    const { result } = renderHook(() => usePluginEnableMutation(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync("official.privacy-filter");
+    });
+
+    expect(client.getQueryData<PluginSummary[]>(pluginKeys.list())).toEqual([
+      expect.objectContaining({
+        plugin_id: "official.privacy-filter",
+        status: "enabled",
+      }),
+    ]);
   });
 });

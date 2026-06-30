@@ -4,7 +4,6 @@ use super::context::{GatewayHookResult, GatewayPluginHookName};
 use super::permissions::GatewayPluginError;
 use super::registry::HookDescriptor;
 
-pub(crate) const DEFAULT_PLUGIN_MUTATION_BODY_BYTES: usize = 256 * 1024;
 pub(crate) const DEFAULT_PLUGIN_MUTATION_STREAM_BYTES: usize = 64 * 1024;
 pub(crate) const DEFAULT_PLUGIN_MUTATION_LOG_BYTES: usize = 64 * 1024;
 pub(crate) const DEFAULT_PLUGIN_MUTATION_HEADER_COUNT: usize = 64;
@@ -22,7 +21,7 @@ pub(crate) struct GatewayPluginMutationBudget {
 impl Default for GatewayPluginMutationBudget {
     fn default() -> Self {
         Self {
-            body_bytes: DEFAULT_PLUGIN_MUTATION_BODY_BYTES,
+            body_bytes: crate::gateway::util::max_request_body_bytes(),
             stream_bytes: DEFAULT_PLUGIN_MUTATION_STREAM_BYTES,
             log_bytes: DEFAULT_PLUGIN_MUTATION_LOG_BYTES,
             header_count: DEFAULT_PLUGIN_MUTATION_HEADER_COUNT,

@@ -69,6 +69,17 @@ function upsertPluginSummary(
   return [nextSummary, ...previous];
 }
 
+function setPluginDetailAndSummary(
+  queryClient: QueryClientLike,
+  pluginId: string,
+  detail: PluginDetail
+) {
+  queryClient.setQueryData<PluginSummary[]>(pluginKeys.list(), (current) =>
+    upsertPluginSummary(current, detail)
+  );
+  queryClient.setQueryData(pluginKeys.detail(pluginId), detail);
+}
+
 export function usePluginsListQuery(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: pluginKeys.list(),
@@ -220,10 +231,7 @@ export function usePluginInstallFromFileMutation() {
     mutationFn: (filePath: string) => pluginInstallFromFile(filePath),
     onSuccess: (next) => {
       if (!next) return;
-      queryClient.setQueryData<PluginSummary[]>(pluginKeys.list(), (current) =>
-        upsertPluginSummary(current, next)
-      );
-      queryClient.setQueryData(pluginKeys.detail(next.summary.plugin_id), next);
+      setPluginDetailAndSummary(queryClient, next.summary.plugin_id, next);
       refreshPluginMutationQueries(queryClient, next.summary.plugin_id);
     },
   });
@@ -269,7 +277,7 @@ export function usePluginUpdateFromFileMutation() {
     mutationFn: (filePath: string) => pluginUpdateFromFile(filePath),
     onSuccess: (next) => {
       if (next) {
-        queryClient.setQueryData(pluginKeys.detail(next.summary.plugin_id), next);
+        setPluginDetailAndSummary(queryClient, next.summary.plugin_id, next);
         refreshPluginMutationQueries(queryClient, next.summary.plugin_id);
       } else {
         queryClient.invalidateQueries({ queryKey: pluginKeys.list() });
@@ -287,7 +295,7 @@ export function usePluginUpdateRemoteMutation() {
     onSuccess: (next, input) => {
       const normalizedPluginId = normalizePluginId(input.pluginId);
       if (next) {
-        queryClient.setQueryData(pluginKeys.detail(normalizedPluginId), next);
+        setPluginDetailAndSummary(queryClient, normalizedPluginId, next);
       }
       refreshPluginMutationQueries(queryClient, normalizedPluginId);
     },
@@ -301,10 +309,7 @@ export function usePluginInstallRemoteMutation() {
     mutationFn: (input: Parameters<typeof pluginInstallRemote>[0]) => pluginInstallRemote(input),
     onSuccess: (next) => {
       if (!next) return;
-      queryClient.setQueryData<PluginSummary[]>(pluginKeys.list(), (current) =>
-        upsertPluginSummary(current, next)
-      );
-      queryClient.setQueryData(pluginKeys.detail(next.summary.plugin_id), next);
+      setPluginDetailAndSummary(queryClient, next.summary.plugin_id, next);
       refreshPluginMutationQueries(queryClient, next.summary.plugin_id);
     },
   });
@@ -319,7 +324,7 @@ export function usePluginRollbackMutation() {
     onSuccess: (next, input) => {
       const normalizedPluginId = normalizePluginId(input.pluginId);
       if (next) {
-        queryClient.setQueryData(pluginKeys.detail(normalizedPluginId), next);
+        setPluginDetailAndSummary(queryClient, normalizedPluginId, next);
       }
       refreshPluginMutationQueries(queryClient, normalizedPluginId);
     },
@@ -334,7 +339,7 @@ export function usePluginQuarantineRevokedMutation() {
     onSuccess: (next, pluginId) => {
       const normalizedPluginId = normalizePluginId(pluginId);
       if (next) {
-        queryClient.setQueryData(pluginKeys.detail(normalizedPluginId), next);
+        setPluginDetailAndSummary(queryClient, normalizedPluginId, next);
       }
       refreshPluginMutationQueries(queryClient, normalizedPluginId);
     },
@@ -349,10 +354,7 @@ export function usePluginInstallOfficialMutation() {
     onSuccess: (next, pluginId) => {
       const normalizedPluginId = normalizePluginId(pluginId);
       if (next) {
-        queryClient.setQueryData<PluginSummary[]>(pluginKeys.list(), (current) =>
-          upsertPluginSummary(current, next)
-        );
-        queryClient.setQueryData(pluginKeys.detail(normalizedPluginId), next);
+        setPluginDetailAndSummary(queryClient, normalizedPluginId, next);
       }
       refreshPluginMutationQueries(queryClient, normalizedPluginId);
     },
@@ -367,7 +369,7 @@ export function usePluginEnableMutation() {
     onSuccess: (next, pluginId) => {
       const normalizedPluginId = normalizePluginId(pluginId);
       if (next) {
-        queryClient.setQueryData(pluginKeys.detail(normalizedPluginId), next);
+        setPluginDetailAndSummary(queryClient, normalizedPluginId, next);
       }
       refreshPluginMutationQueries(queryClient, normalizedPluginId);
     },
@@ -382,7 +384,7 @@ export function usePluginDisableMutation() {
     onSuccess: (next, pluginId) => {
       const normalizedPluginId = normalizePluginId(pluginId);
       if (next) {
-        queryClient.setQueryData(pluginKeys.detail(normalizedPluginId), next);
+        setPluginDetailAndSummary(queryClient, normalizedPluginId, next);
       }
       refreshPluginMutationQueries(queryClient, normalizedPluginId);
     },
@@ -397,7 +399,7 @@ export function usePluginUninstallMutation() {
     onSuccess: (next, pluginId) => {
       const normalizedPluginId = normalizePluginId(pluginId);
       if (next) {
-        queryClient.setQueryData(pluginKeys.detail(normalizedPluginId), next);
+        setPluginDetailAndSummary(queryClient, normalizedPluginId, next);
       }
       refreshPluginMutationQueries(queryClient, normalizedPluginId);
     },
@@ -413,7 +415,7 @@ export function usePluginSaveConfigMutation() {
     onSuccess: (next, input) => {
       const normalizedPluginId = normalizePluginId(input.pluginId);
       if (next) {
-        queryClient.setQueryData(pluginKeys.detail(normalizedPluginId), next);
+        setPluginDetailAndSummary(queryClient, normalizedPluginId, next);
       }
       refreshPluginQueries(queryClient, normalizedPluginId);
     },
@@ -429,7 +431,7 @@ export function usePluginGrantPermissionsMutation() {
     onSuccess: (next, input) => {
       const normalizedPluginId = normalizePluginId(input.pluginId);
       if (next) {
-        queryClient.setQueryData(pluginKeys.detail(normalizedPluginId), next);
+        setPluginDetailAndSummary(queryClient, normalizedPluginId, next);
       }
       refreshPluginQueries(queryClient, normalizedPluginId);
     },

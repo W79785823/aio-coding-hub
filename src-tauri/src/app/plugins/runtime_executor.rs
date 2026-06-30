@@ -1,5 +1,6 @@
 //! Usage: Runtime dispatch for gateway plugin execution.
 
+use crate::app::plugins::extension_host::DEFAULT_EXTENSION_HOST_CALL_TIMEOUT;
 use crate::app::plugins::extension_host_registry::{
     ExtensionHostInstanceLifecycleRegistry, ExtensionHostInstanceRegistry,
 };
@@ -152,9 +153,12 @@ impl GatewayPluginExecutor for RuntimeGatewayPluginExecutor {
     ) -> Duration {
         let manager = PluginRuntimeManager::new();
         match manager.runtime_dispatch(&plugin.summary.plugin_id, &plugin.manifest.runtime) {
-            Ok(RuntimeDispatch::ExtensionHost) => {
-                default_timeout.saturating_add(EXTENSION_HOST_GATEWAY_TIMEOUT_GRACE)
-            }
+            Ok(RuntimeDispatch::ExtensionHost) => default_timeout
+                .saturating_add(EXTENSION_HOST_GATEWAY_TIMEOUT_GRACE)
+                .max(
+                    DEFAULT_EXTENSION_HOST_CALL_TIMEOUT
+                        .saturating_add(EXTENSION_HOST_GATEWAY_TIMEOUT_GRACE),
+                ),
             _ => default_timeout,
         }
     }
@@ -278,6 +282,62 @@ mod tests {
             .expect("extension host gateway hook executes");
 
         assert_eq!(result.request_body.as_deref(), Some(r#"{"messages":[]}"#));
+    }
+
+    #[tokio::test]
+    async fn runtime_executor_extension_host_request_hooks_receive_large_bodies_without_truncation()
+    {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_gateway_extension_plugin(
+            temp.path(),
+            "gateway.request.afterBodyRead",
+            r#"(() => {
+                const body = arguments[0].context.request.body;
+                if (arguments[0].context.request.body_truncated) {
+                  return { action: "block", reason: "body was truncated" };
+                }
+                return {
+                  action: "replace",
+                  requestBody: body.replace("13344441520", "[电话]")
+                };
+            })()"#,
+        );
+        let plugin = extension_host_plugin_detail_with_root("example.extension", temp.path());
+        let body = json!({
+            "messages": [{
+                "role": "user",
+                "content": format!(
+                    "{} 你知道 13344441520 是哪里的手机号嘛",
+                    "x".repeat(300 * 1024)
+                )
+            }]
+        })
+        .to_string();
+        let pipeline = GatewayPluginPipeline::for_tests(
+            vec![plugin],
+            Arc::new(RuntimeGatewayPluginExecutor::for_tests()),
+            GatewayPluginPipelineConfig::default(),
+        );
+
+        let output = pipeline
+            .run_request_hook(GatewayRequestHookInput {
+                hook_name: GatewayPluginHookName::RequestAfterBodyRead,
+                trace_id: "trace-extension-large-body".to_string(),
+                cli_key: "codex".to_string(),
+                method: Method::POST,
+                path: "/v1/responses".to_string(),
+                query: None,
+                headers: HeaderMap::new(),
+                body: Bytes::from(body),
+                requested_model: None,
+            })
+            .await
+            .expect("large extension host request body should be available to plugins");
+        let redacted = String::from_utf8(output.body.to_vec()).expect("utf8 body");
+
+        assert!(redacted.contains("[电话]"));
+        assert!(!redacted.contains("13344441520"));
+        assert!(output.blocked.is_none());
     }
 
     #[tokio::test]

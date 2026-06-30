@@ -13,8 +13,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const WORKER_VERSION: u32 = 1;
-pub(crate) const DEFAULT_EXTENSION_HOST_MAX_LINE_BYTES: usize = 256 * 1024;
+const EXTENSION_HOST_JSON_RPC_BODY_EXPANSION_FACTOR: usize = 6;
+const EXTENSION_HOST_JSON_RPC_OVERHEAD_BYTES: usize = 1024 * 1024;
 const DEFAULT_JS_TIMEOUT_MS: u64 = 30_000;
+
+pub(crate) fn default_extension_host_max_line_bytes() -> usize {
+    crate::gateway::util::max_request_body_bytes()
+        .saturating_mul(EXTENSION_HOST_JSON_RPC_BODY_EXPANSION_FACTOR)
+        .saturating_add(EXTENSION_HOST_JSON_RPC_OVERHEAD_BYTES)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1151,7 +1158,7 @@ fn write_error(err: io::Error) -> WorkerError {
 }
 
 fn default_max_line_bytes() -> usize {
-    DEFAULT_EXTENSION_HOST_MAX_LINE_BYTES
+    default_extension_host_max_line_bytes()
 }
 
 fn default_js_timeout_ms() -> u64 {

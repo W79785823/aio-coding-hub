@@ -355,6 +355,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn official_privacy_filter_plugin_redacts_large_responses_input_text_without_truncation()
+    {
+        let (_temp, pipeline) = official_privacy_filter_pipeline();
+
+        let request = pipeline
+            .run_request_hook(GatewayRequestHookInput {
+                hook_name: GatewayPluginHookName::RequestAfterBodyRead,
+                trace_id: "trace-privacy-filter-large-responses".to_string(),
+                cli_key: "codex".to_string(),
+                method: Method::POST,
+                path: "/v1/responses".to_string(),
+                query: None,
+                headers: HeaderMap::new(),
+                body: Bytes::from(
+                    json!({
+                        "input": [{
+                            "type": "message",
+                            "role": "user",
+                            "content": [{
+                                "type": "input_text",
+                                "text": format!(
+                                    "{} 你知道 13344441520 是哪里的手机号嘛",
+                                    "x".repeat(300 * 1024)
+                                )
+                            }]
+                        }]
+                    })
+                    .to_string(),
+                ),
+                requested_model: Some("gpt-test".to_string()),
+            })
+            .await
+            .expect("privacy filter request hook should accept large request body");
+        let request_text = String::from_utf8(request.body.to_vec()).expect("utf8 body");
+
+        assert!(request.blocked.is_none());
+        assert_eq!(request.execution_reports.len(), 1);
+        assert_eq!(request.execution_reports[0].status, "completed");
+        assert_eq!(request.execution_reports[0].error_code, None);
+        assert!(request_text.contains("[电话]"));
+        assert!(!request_text.contains("13344441520"));
+    }
+
+    #[tokio::test]
     async fn official_privacy_filter_plugin_matches_upstream_algorithmic_behavior() {
         let (_temp, pipeline) = official_privacy_filter_pipeline();
 
