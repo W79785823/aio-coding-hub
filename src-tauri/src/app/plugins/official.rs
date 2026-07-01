@@ -114,7 +114,7 @@ fn official_default_config(plugin_id: &str) -> Value {
 mod tests {
     use super::*;
     use crate::app::plugins::runtime_executor::RuntimeGatewayPluginExecutor;
-    use crate::domain::plugins::{PluginInstallSource, PluginRuntime, PluginStatus};
+    use crate::domain::plugins::{PluginInstallSource, PluginStatus};
     use crate::gateway::plugins::context::{GatewayPluginHookName, GatewayRequestHookInput};
     use crate::gateway::plugins::pipeline::{GatewayPluginPipeline, GatewayPluginPipelineConfig};
     use crate::infra::plugins::repository::{self, InsertPluginInput};
@@ -126,10 +126,6 @@ mod tests {
 
     fn enabled_official_plugin(plugin_id: &str) -> crate::domain::plugins::PluginDetail {
         let fixture = official_plugin(plugin_id).expect("official plugin fixture");
-        let runtime = match &fixture.manifest.runtime {
-            PluginRuntime::ExtensionHost { .. } => "extensionHost".to_string(),
-            PluginRuntime::Native { engine } => format!("native:{engine}"),
-        };
         crate::domain::plugins::PluginDetail {
             summary: crate::domain::plugins::PluginSummary {
                 id: 1,
@@ -137,7 +133,7 @@ mod tests {
                 name: fixture.manifest.name.clone(),
                 current_version: Some(fixture.manifest.version.clone()),
                 status: PluginStatus::Enabled,
-                runtime,
+                runtime: "extensionHost".to_string(),
                 permission_risk: crate::domain::plugins::PluginPermissionRisk::High,
                 update_available: false,
                 last_error: None,

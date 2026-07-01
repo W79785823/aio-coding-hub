@@ -1,12 +1,12 @@
 //! Usage: Parent-side extension host worker lifecycle and command dispatch.
 
+use super::extension_host_process::{
+    ExtensionHostChildProcess, ExtensionHostMethodHandler, ExtensionHostProcessConfig,
+};
 use super::extension_host_worker::{
     default_extension_host_max_line_bytes, ExtensionHostWorkerConfig,
 };
 use super::privacy_redaction_service::PrivacyRedactionService;
-use super::process_runtime::{
-    JsonRpcHostMethodHandler, JsonRpcProcessRuntime, ProcessRuntimeConfig,
-};
 use crate::db;
 use crate::infra::plugins::{repository, runtime_reports};
 use crate::plugins::PluginManifest;
@@ -26,10 +26,14 @@ pub(crate) const DEFAULT_EXTENSION_HOST_CALL_TIMEOUT: Duration = Duration::from_
 const DEFAULT_EXTENSION_HOST_IDLE_RECYCLE: Duration = Duration::from_secs(30);
 const PLUGIN_STORAGE_MAX_BYTES: usize = 64 * 1024;
 
+fn extension_host_start_timeout(call_timeout: Duration) -> Duration {
+    DEFAULT_EXTENSION_HOST_START_TIMEOUT.min(call_timeout)
+}
+
 #[derive(Debug)]
 pub(crate) struct ExtensionHostInstance {
     manifest: PluginManifest,
-    runtime: JsonRpcProcessRuntime,
+    runtime: ExtensionHostChildProcess,
     _config_file: ExtensionHostConfigFile,
 }
 
@@ -107,7 +111,7 @@ impl ExtensionHostInstance {
         manifest: PluginManifest,
         plugin_root: PathBuf,
         call_timeout: Duration,
-        host_handler: Option<Arc<dyn JsonRpcHostMethodHandler>>,
+        host_handler: Option<Arc<dyn ExtensionHostMethodHandler>>,
     ) -> AppResult<Self> {
         let current_exe = std::env::current_exe().map_err(|err| {
             AppError::new(
@@ -130,7 +134,7 @@ impl ExtensionHostInstance {
         plugin_root: PathBuf,
         program: PathBuf,
         call_timeout: Duration,
-        host_handler: Option<Arc<dyn JsonRpcHostMethodHandler>>,
+        host_handler: Option<Arc<dyn ExtensionHostMethodHandler>>,
     ) -> AppResult<Self> {
         let contribution_hash = contribution_hash(&manifest);
         let config_file =
@@ -152,10 +156,10 @@ impl ExtensionHostInstance {
             config_file.path().display().to_string(),
         ];
         let max_line_bytes = default_extension_host_max_line_bytes();
-        let runtime = JsonRpcProcessRuntime::start(ProcessRuntimeConfig {
+        let runtime = ExtensionHostChildProcess::start(ExtensionHostProcessConfig {
             program: program.display().to_string(),
             args,
-            start_timeout: DEFAULT_EXTENSION_HOST_START_TIMEOUT,
+            start_timeout: extension_host_start_timeout(call_timeout),
             hook_timeout: call_timeout,
             idle_recycle: DEFAULT_EXTENSION_HOST_IDLE_RECYCLE,
             max_line_bytes,
@@ -164,7 +168,7 @@ impl ExtensionHostInstance {
             host_handler,
         })
         .await
-        .map_err(map_process_error)?;
+        .map_err(map_extension_host_process_error)?;
 
         let mut host = Self {
             manifest,
@@ -188,7 +192,7 @@ impl ExtensionHostInstance {
             )
             .await
             .map(|_| ())
-            .map_err(map_process_error)
+            .map_err(map_extension_host_process_error)
     }
 
     #[allow(dead_code)]
@@ -197,7 +201,7 @@ impl ExtensionHostInstance {
             .call_method("extension.activate", Value::Null)
             .await
             .map(|_| ())
-            .map_err(map_process_error)
+            .map_err(map_extension_host_process_error)
     }
 
     #[allow(dead_code)]
@@ -223,7 +227,7 @@ impl ExtensionHostInstance {
                 }),
             )
             .await
-            .map_err(map_process_error)
+            .map_err(map_extension_host_process_error)
     }
 
     pub(crate) async fn execute_gateway_hook(
@@ -252,7 +256,7 @@ impl ExtensionHostInstance {
                 }),
             )
             .await
-            .map_err(map_process_error)
+            .map_err(map_extension_host_process_error)
     }
 
     #[cfg(test)]
@@ -270,7 +274,7 @@ impl ExtensionHostInstance {
                 }),
             )
             .await
-            .map_err(map_process_error)
+            .map_err(map_extension_host_process_error)
     }
 
     #[allow(dead_code)]
@@ -341,7 +345,7 @@ struct ExtensionHostApiHandler {
     privacy_redaction: Arc<PrivacyRedactionService>,
 }
 
-impl JsonRpcHostMethodHandler for ExtensionHostApiHandler {
+impl ExtensionHostMethodHandler for ExtensionHostApiHandler {
     fn handle_host_method(&self, method: &str, params: Value) -> AppResult<Value> {
         match method {
             "storage.get" => self.storage_get(params),
@@ -628,9 +632,9 @@ fn read_manifest(plugin_root: &Path) -> AppResult<PluginManifest> {
     })
 }
 
-fn map_process_error(err: AppError) -> AppError {
+fn map_extension_host_process_error(err: AppError) -> AppError {
     match err.code() {
-        "PLUGIN_PROCESS_HOOK_TIMEOUT" => AppError::new(
+        "PLUGIN_EXTENSION_HOST_PROCESS_HOOK_TIMEOUT" => AppError::new(
             "PLUGIN_EXTENSION_CALL_TIMEOUT",
             "extension host call timed out",
         ),
@@ -638,15 +642,15 @@ fn map_process_error(err: AppError) -> AppError {
             "PLUGIN_EXTENSION_CALL_TIMEOUT",
             "extension host call timed out",
         ),
-        "PLUGIN_PROCESS_START_TIMEOUT" => AppError::new(
+        "PLUGIN_EXTENSION_HOST_PROCESS_START_TIMEOUT" => AppError::new(
             "PLUGIN_EXTENSION_START_TIMEOUT",
             "extension host worker did not become ready before startup timeout",
         ),
-        "PLUGIN_PROCESS_REQUEST_TOO_LARGE" => AppError::new(
+        "PLUGIN_EXTENSION_HOST_PROCESS_REQUEST_TOO_LARGE" => AppError::new(
             "PLUGIN_EXTENSION_REQUEST_TOO_LARGE",
             "extension host request exceeded max line bytes",
         ),
-        "PLUGIN_PROCESS_RESPONSE_TOO_LARGE" => AppError::new(
+        "PLUGIN_EXTENSION_HOST_PROCESS_RESPONSE_TOO_LARGE" => AppError::new(
             "PLUGIN_EXTENSION_RESPONSE_TOO_LARGE",
             "extension host response exceeded max line bytes",
         ),
@@ -877,6 +881,18 @@ mod tests {
             started.elapsed()
         );
         assert!(!host.is_running());
+    }
+
+    #[test]
+    fn extension_host_start_timeout_is_capped_by_call_budget() {
+        assert_eq!(
+            super::extension_host_start_timeout(Duration::from_millis(50)),
+            Duration::from_millis(50)
+        );
+        assert_eq!(
+            super::extension_host_start_timeout(Duration::from_secs(30)),
+            Duration::from_secs(5)
+        );
     }
 
     #[tokio::test]
@@ -1192,6 +1208,6 @@ mod tests {
         .await
         .expect_err("hash mismatch should fail handshake");
 
-        assert_eq!(err.code(), "PLUGIN_PROCESS_CRASHED");
+        assert_eq!(err.code(), "PLUGIN_EXTENSION_HOST_PROCESS_CRASHED");
     }
 }

@@ -125,25 +125,4 @@ mod tests {
         )
         .is_empty());
     }
-
-    #[test]
-    fn legacy_native_permissions_are_not_runtime_access() {
-        let mut plugin = extension_host_plugin(
-            vec![PluginHook {
-                name: "gateway.request.afterBodyRead".to_string(),
-                priority: 10,
-                failure_policy: Some("fail-open".to_string()),
-            }],
-            vec!["gateway.hooks"],
-        );
-        plugin.manifest.runtime = PluginRuntime::Native {
-            engine: "legacy".to_string(),
-        };
-        plugin.granted_permissions = vec!["request.body.read".to_string()];
-
-        let permissions =
-            effective_hook_permissions(&plugin, GatewayPluginHookName::RequestAfterBodyRead);
-
-        assert!(permissions.is_empty());
-    }
 }

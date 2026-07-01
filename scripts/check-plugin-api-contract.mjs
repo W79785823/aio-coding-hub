@@ -17,6 +17,12 @@ function readText(path) {
   return readFileSync(fullPath, "utf8");
 }
 
+function requirePathMissing(path, label) {
+  if (existsSync(join(repoRoot, path))) {
+    failures.push(`${path} must not exist as ${label}`);
+  }
+}
+
 function readJson(path) {
   const text = readText(path);
   if (!text) return null;
@@ -194,6 +200,19 @@ if (contract) {
     failures.push(`${contractPath}.policyGatedRuntimes must not expose public community runtimes`);
   }
   const capabilities = requireArray(`${contractPath}.capabilities`, contract.capabilities);
+  const reservedHostMediatedLabels = ["network.fetch", "file.read", "file.write", "secret.read"];
+  for (const label of reservedHostMediatedLabels) {
+    if (capabilities.includes(label)) {
+      failures.push(
+        `${contractPath}.capabilities must not include reserved host-mediated label ${label}`
+      );
+    }
+    if ((contract.activePermissions ?? []).includes(label)) {
+      failures.push(
+        `${contractPath}.activePermissions must not include reserved host-mediated label ${label}`
+      );
+    }
+  }
   for (const capability of [
     "gateway.hooks",
     "protocol.bridge",
@@ -313,6 +332,55 @@ if (contract) {
   }
 
   const sdk = readText("packages/plugin-sdk/src/index.ts");
+  const generatedBindings = readText("src/generated/bindings.ts");
+  requireIncludes(
+    "src/generated/bindings.ts",
+    generatedBindings,
+    ['kind: "extensionHost"'],
+    "generated Extension Host runtime"
+  );
+  requireNotIncludes(
+    "src/generated/bindings.ts",
+    generatedBindings,
+    ['kind: "native"', 'kind: "wasm"', 'kind: "process"'],
+    "public runtime"
+  );
+  const pluginModules = readText("src-tauri/src/app/plugins/mod.rs");
+  requireNotIncludes(
+    "src-tauri/src/app/plugins/mod.rs",
+    pluginModules,
+    ["mod process_runtime", "mod wasm_runtime"],
+    "alternate plugin runtime module"
+  );
+  const cargoToml = readText("src-tauri/Cargo.toml");
+  requireNotIncludes(
+    "src-tauri/Cargo.toml",
+    cargoToml,
+    ["wasmtime", "wat ="],
+    "WASM runtime dependency"
+  );
+  const packageJson = readText("package.json");
+  requireNotIncludes(
+    "package.json",
+    packageJson,
+    ["plugin-wasm-sdk:test"],
+    "WASM SDK script"
+  );
+  requirePathMissing("packages/plugin-wasm-sdk", "WASM SDK package");
+  const pluginService = readText("src/services/plugins.ts");
+  requireNotIncludes(
+    "src/services/plugins.ts",
+    pluginService,
+    ["pluginGrantPermissions", "pluginRevokePermission", "plugin_grant_permissions", "plugin_revoke_permission"],
+    "manual permission frontend service wrapper"
+  );
+  const pluginQuery = readText("src/query/plugins.ts");
+  requireNotIncludes(
+    "src/query/plugins.ts",
+    pluginQuery,
+    ["usePluginGrantPermissionsMutation", "usePluginRevokePermissionMutation"],
+    "manual permission query mutation"
+  );
   requireIncludes(
     "packages/plugin-sdk/src/index.ts",
     sdk,

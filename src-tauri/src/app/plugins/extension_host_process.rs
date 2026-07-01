@@ -1,4 +1,4 @@
-//! Usage: Experimental JSON-RPC-over-stdio process plugin runtime PoC.
+//! Usage: Extension Host JSON-RPC-over-stdio child process transport.
 #![allow(dead_code)]
 
 use crate::shared::error::{AppError, AppResult};
@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
-pub(crate) struct ProcessRuntimeConfig {
+pub(crate) struct ExtensionHostProcessConfig {
     pub(crate) program: String,
     pub(crate) args: Vec<String>,
     pub(crate) start_timeout: Duration,
@@ -20,12 +20,12 @@ pub(crate) struct ProcessRuntimeConfig {
     pub(crate) max_line_bytes: usize,
     pub(crate) ready_method: String,
     pub(crate) allow_startup_noise: bool,
-    pub(crate) host_handler: Option<Arc<dyn JsonRpcHostMethodHandler>>,
+    pub(crate) host_handler: Option<Arc<dyn ExtensionHostMethodHandler>>,
 }
 
-impl fmt::Debug for ProcessRuntimeConfig {
+impl fmt::Debug for ExtensionHostProcessConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ProcessRuntimeConfig")
+        f.debug_struct("ExtensionHostProcessConfig")
             .field("program", &self.program)
             .field("args", &self.args)
             .field("start_timeout", &self.start_timeout)
@@ -39,7 +39,7 @@ impl fmt::Debug for ProcessRuntimeConfig {
     }
 }
 
-impl Default for ProcessRuntimeConfig {
+impl Default for ExtensionHostProcessConfig {
     fn default() -> Self {
         Self {
             program: String::new(),
@@ -55,13 +55,13 @@ impl Default for ProcessRuntimeConfig {
     }
 }
 
-pub(crate) trait JsonRpcHostMethodHandler: Send + Sync + 'static {
+pub(crate) trait ExtensionHostMethodHandler: Send + Sync + 'static {
     fn handle_host_method(&self, method: &str, params: JsonValue) -> AppResult<JsonValue>;
 }
 
 #[derive(Debug)]
-pub(crate) struct JsonRpcProcessRuntime {
-    config: ProcessRuntimeConfig,
+pub(crate) struct ExtensionHostChildProcess {
+    config: ExtensionHostProcessConfig,
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     stdout: Option<BufReader<ChildStdout>>,
@@ -69,12 +69,12 @@ pub(crate) struct JsonRpcProcessRuntime {
     last_used: Instant,
 }
 
-impl JsonRpcProcessRuntime {
-    pub(crate) async fn start(config: ProcessRuntimeConfig) -> AppResult<Self> {
+impl ExtensionHostChildProcess {
+    pub(crate) async fn start(config: ExtensionHostProcessConfig) -> AppResult<Self> {
         if config.program.trim().is_empty() {
             return Err(AppError::new(
-                "PLUGIN_PROCESS_INVALID_CONFIG",
-                "process runtime program must not be empty",
+                "PLUGIN_EXTENSION_HOST_PROCESS_INVALID_CONFIG",
+                "extension host process program must not be empty",
             ));
         }
         let mut command = Command::new(&config.program);
@@ -91,20 +91,20 @@ impl JsonRpcProcessRuntime {
 
         let mut child = command.spawn().map_err(|err| {
             AppError::new(
-                "PLUGIN_PROCESS_SPAWN_FAILED",
-                format!("failed to start process plugin: {err}"),
+                "PLUGIN_EXTENSION_HOST_PROCESS_SPAWN_FAILED",
+                format!("failed to start extension host process: {err}"),
             )
         })?;
         let stdin = child.stdin.take().ok_or_else(|| {
             AppError::new(
-                "PLUGIN_PROCESS_STDIN_UNAVAILABLE",
-                "process plugin stdin was unavailable",
+                "PLUGIN_EXTENSION_HOST_PROCESS_STDIN_UNAVAILABLE",
+                "extension host process stdin was unavailable",
             )
         })?;
         let stdout = child.stdout.take().ok_or_else(|| {
             AppError::new(
-                "PLUGIN_PROCESS_STDOUT_UNAVAILABLE",
-                "process plugin stdout was unavailable",
+                "PLUGIN_EXTENSION_HOST_PROCESS_STDOUT_UNAVAILABLE",
+                "extension host process stdout was unavailable",
             )
         })?;
         if let Some(mut stderr) = child.stderr.take() {
@@ -126,9 +126,9 @@ impl JsonRpcProcessRuntime {
             .await
             .map_err(|_| {
                 AppError::new(
-                    "PLUGIN_PROCESS_START_TIMEOUT",
+                    "PLUGIN_EXTENSION_HOST_PROCESS_START_TIMEOUT",
                     format!(
-                        "process plugin did not send ready message before start timeout: program={}, timeout_ms={}",
+                        "extension host process did not send ready message before start timeout: program={}, timeout_ms={}",
                         runtime.config.program,
                         runtime.config.start_timeout.as_millis()
                     ),
@@ -160,15 +160,15 @@ impl JsonRpcProcessRuntime {
         });
         let line = serde_json::to_vec(&request).map_err(|err| {
             AppError::new(
-                "PLUGIN_PROCESS_ENCODE_FAILED",
+                "PLUGIN_EXTENSION_HOST_PROCESS_ENCODE_FAILED",
                 format!("failed to encode JSON-RPC request: {err}"),
             )
         })?;
         if line.len() + 1 > self.config.max_line_bytes {
             return Err(AppError::new(
-                "PLUGIN_PROCESS_REQUEST_TOO_LARGE",
+                "PLUGIN_EXTENSION_HOST_PROCESS_REQUEST_TOO_LARGE",
                 format!(
-                    "process plugin request exceeded {} bytes",
+                    "extension host process request exceeded {} bytes",
                     self.config.max_line_bytes
                 ),
             ));
@@ -194,8 +194,8 @@ impl JsonRpcProcessRuntime {
             Err(_) => {
                 self.kill_child().await;
                 Err(AppError::new(
-                    "PLUGIN_PROCESS_HOOK_TIMEOUT",
-                    "process plugin did not respond before hook timeout",
+                    "PLUGIN_EXTENSION_HOST_PROCESS_HOOK_TIMEOUT",
+                    "extension host process did not respond before hook timeout",
                 ))
             }
         }
@@ -227,30 +227,27 @@ impl JsonRpcProcessRuntime {
     async fn write_line(&mut self, bytes: &[u8]) -> AppResult<()> {
         let Some(stdin) = self.stdin.as_mut() else {
             return Err(AppError::new(
-                "PLUGIN_PROCESS_CRASHED",
-                "process plugin stdin is closed",
+                "PLUGIN_EXTENSION_HOST_PROCESS_CRASHED",
+                "extension host process stdin is closed",
             ));
         };
-        stdin
-            .write_all(bytes)
-            .await
-            .map_err(|err| process_write_error("write process plugin request", err))?;
-        stdin
-            .write_all(b"\n")
-            .await
-            .map_err(|err| process_write_error("terminate process plugin request line", err))?;
-        stdin
-            .flush()
-            .await
-            .map_err(|err| process_write_error("flush process plugin request", err))
+        stdin.write_all(bytes).await.map_err(|err| {
+            extension_host_process_write_error("write extension host process request", err)
+        })?;
+        stdin.write_all(b"\n").await.map_err(|err| {
+            extension_host_process_write_error("terminate extension host process request line", err)
+        })?;
+        stdin.flush().await.map_err(|err| {
+            extension_host_process_write_error("flush extension host process request", err)
+        })
     }
 
     async fn read_json_line(&mut self) -> AppResult<JsonValue> {
         let line = self.read_line_string().await?;
         serde_json::from_str(&line).map_err(|err| {
             AppError::new(
-                "PLUGIN_PROCESS_PROTOCOL_ERROR",
-                format!("process plugin response was not valid JSON: {err}"),
+                "PLUGIN_EXTENSION_HOST_PROCESS_PROTOCOL_ERROR",
+                format!("extension host process response was not valid JSON: {err}"),
             )
         })
     }
@@ -262,14 +259,14 @@ impl JsonRpcProcessRuntime {
                 Ok(value) => value,
                 Err(err) if self.config.allow_startup_noise => {
                     tracing::debug!(
-                        "ignoring process plugin startup line that was not JSON: {err}"
+                        "ignoring extension host process startup line that was not JSON: {err}"
                     );
                     continue;
                 }
                 Err(err) => {
                     return Err(AppError::new(
-                        "PLUGIN_PROCESS_PROTOCOL_ERROR",
-                        format!("process plugin response was not valid JSON: {err}"),
+                        "PLUGIN_EXTENSION_HOST_PROCESS_PROTOCOL_ERROR",
+                        format!("extension host process response was not valid JSON: {err}"),
                     ));
                 }
             };
@@ -285,14 +282,14 @@ impl JsonRpcProcessRuntime {
                         .get("method")
                         .and_then(|method| method.as_str())
                         .unwrap_or("<missing>"),
-                    "ignoring process plugin startup message before ready"
+                    "ignoring extension host process startup message before ready"
                 );
                 continue;
             }
             return Err(AppError::new(
-                "PLUGIN_PROCESS_PROTOCOL_ERROR",
+                "PLUGIN_EXTENSION_HOST_PROCESS_PROTOCOL_ERROR",
                 format!(
-                    "process plugin first message must be {}",
+                    "extension host process first message must be {}",
                     self.config.ready_method
                 ),
             ));
@@ -326,13 +323,13 @@ impl JsonRpcProcessRuntime {
                 };
                 let bytes = serde_json::to_vec(&message).map_err(|err| {
                     AppError::new(
-                        "PLUGIN_PROCESS_ENCODE_FAILED",
+                        "PLUGIN_EXTENSION_HOST_PROCESS_ENCODE_FAILED",
                         format!("failed to encode host JSON-RPC response: {err}"),
                     )
                 })?;
                 if bytes.len() + 1 > self.config.max_line_bytes {
                     return Err(AppError::new(
-                        "PLUGIN_PROCESS_RESPONSE_TOO_LARGE",
+                        "PLUGIN_EXTENSION_HOST_PROCESS_RESPONSE_TOO_LARGE",
                         format!(
                             "host JSON-RPC response exceeded {} bytes",
                             self.config.max_line_bytes
@@ -343,8 +340,8 @@ impl JsonRpcProcessRuntime {
                 continue;
             }
             return Err(AppError::new(
-                "PLUGIN_PROCESS_PROTOCOL_ERROR",
-                "process plugin sent an unexpected JSON-RPC message",
+                "PLUGIN_EXTENSION_HOST_PROCESS_PROTOCOL_ERROR",
+                "extension host process sent an unexpected JSON-RPC message",
             ));
         }
     }
@@ -356,7 +353,7 @@ impl JsonRpcProcessRuntime {
             .and_then(JsonValue::as_str)
             .ok_or_else(|| {
                 AppError::new(
-                    "PLUGIN_PROCESS_INVALID_HOST_CALL",
+                    "PLUGIN_EXTENSION_HOST_PROCESS_INVALID_HOST_CALL",
                     "host.call requires params.method",
                 )
             })?;
@@ -367,7 +364,7 @@ impl JsonRpcProcessRuntime {
             .unwrap_or(JsonValue::Null);
         let handler = self.config.host_handler.as_ref().ok_or_else(|| {
             AppError::new(
-                "PLUGIN_PROCESS_HOST_CALL_UNAVAILABLE",
+                "PLUGIN_EXTENSION_HOST_PROCESS_HOST_CALL_UNAVAILABLE",
                 format!("host method is not available: {method}"),
             )
         })?;
@@ -378,15 +375,15 @@ impl JsonRpcProcessRuntime {
         let max_line_bytes = self.config.max_line_bytes;
         let Some(stdout) = self.stdout.as_mut() else {
             return Err(AppError::new(
-                "PLUGIN_PROCESS_CRASHED",
-                "process plugin stdout is closed",
+                "PLUGIN_EXTENSION_HOST_PROCESS_CRASHED",
+                "extension host process stdout is closed",
             ));
         };
         let bytes = read_bounded_line(stdout, max_line_bytes).await?;
         String::from_utf8(bytes).map_err(|err| {
             AppError::new(
-                "PLUGIN_PROCESS_PROTOCOL_ERROR",
-                format!("process plugin response was not valid UTF-8: {err}"),
+                "PLUGIN_EXTENSION_HOST_PROCESS_PROTOCOL_ERROR",
+                format!("extension host process response was not valid UTF-8: {err}"),
             )
         })
     }
@@ -410,7 +407,7 @@ impl JsonRpcProcessRuntime {
     }
 }
 
-impl Drop for JsonRpcProcessRuntime {
+impl Drop for ExtensionHostChildProcess {
     fn drop(&mut self) {
         self.stdin.take();
         self.stdout.take();
@@ -461,15 +458,15 @@ async fn read_bounded_line(
     loop {
         let read = stdout.read(&mut byte).await.map_err(|err| {
             AppError::new(
-                "PLUGIN_PROCESS_READ_FAILED",
-                format!("failed to read process plugin response: {err}"),
+                "PLUGIN_EXTENSION_HOST_PROCESS_READ_FAILED",
+                format!("failed to read extension host process response: {err}"),
             )
         })?;
         if read == 0 {
             if line.is_empty() {
                 return Err(AppError::new(
-                    "PLUGIN_PROCESS_CRASHED",
-                    "process plugin exited before sending a response",
+                    "PLUGIN_EXTENSION_HOST_PROCESS_CRASHED",
+                    "extension host process exited before sending a response",
                 ));
             }
             return Ok(line);
@@ -477,8 +474,8 @@ async fn read_bounded_line(
         line.push(byte[0]);
         if line.len() > max_line_bytes {
             return Err(AppError::new(
-                "PLUGIN_PROCESS_RESPONSE_TOO_LARGE",
-                format!("process plugin response exceeded {max_line_bytes} bytes"),
+                "PLUGIN_EXTENSION_HOST_PROCESS_RESPONSE_TOO_LARGE",
+                format!("extension host process response exceeded {max_line_bytes} bytes"),
             ));
         }
         if byte[0] == b'\n' {
@@ -487,18 +484,18 @@ async fn read_bounded_line(
     }
 }
 
-fn process_write_error(operation: &str, err: std::io::Error) -> AppError {
+fn extension_host_process_write_error(operation: &str, err: std::io::Error) -> AppError {
     if matches!(
         err.kind(),
         ErrorKind::BrokenPipe | ErrorKind::ConnectionReset
     ) {
         return AppError::new(
-            "PLUGIN_PROCESS_CRASHED",
-            format!("process plugin pipe closed while attempting to {operation}: {err}"),
+            "PLUGIN_EXTENSION_HOST_PROCESS_CRASHED",
+            format!("extension host process pipe closed while attempting to {operation}: {err}"),
         );
     }
     AppError::new(
-        "PLUGIN_PROCESS_WRITE_FAILED",
+        "PLUGIN_EXTENSION_HOST_PROCESS_WRITE_FAILED",
         format!("failed to {operation}: {err}"),
     )
 }
@@ -506,14 +503,14 @@ fn process_write_error(operation: &str, err: std::io::Error) -> AppError {
 fn validate_json_rpc_response(expected_id: u64, response: JsonValue) -> AppResult<JsonValue> {
     if response.get("jsonrpc").and_then(|value| value.as_str()) != Some("2.0") {
         return Err(AppError::new(
-            "PLUGIN_PROCESS_PROTOCOL_ERROR",
-            "process plugin response must use JSON-RPC 2.0",
+            "PLUGIN_EXTENSION_HOST_PROCESS_PROTOCOL_ERROR",
+            "extension host process response must use JSON-RPC 2.0",
         ));
     }
     if response.get("id").and_then(|value| value.as_u64()) != Some(expected_id) {
         return Err(AppError::new(
-            "PLUGIN_PROCESS_PROTOCOL_ERROR",
-            "process plugin response id did not match request id",
+            "PLUGIN_EXTENSION_HOST_PROCESS_PROTOCOL_ERROR",
+            "extension host process response id did not match request id",
         ));
     }
     if let Some(error) = response.get("error") {
@@ -525,18 +522,18 @@ fn validate_json_rpc_response(expected_id: u64, response: JsonValue) -> AppResul
             let message = error
                 .get("message")
                 .and_then(|message| message.as_str())
-                .unwrap_or("process plugin returned JSON-RPC error");
+                .unwrap_or("extension host process returned JSON-RPC error");
             return Err(AppError::new(code, message));
         }
         return Err(AppError::new(
-            "PLUGIN_PROCESS_REMOTE_ERROR",
-            format!("process plugin returned JSON-RPC error: {error}"),
+            "PLUGIN_EXTENSION_HOST_PROCESS_REMOTE_ERROR",
+            format!("extension host process returned JSON-RPC error: {error}"),
         ));
     }
     response.get("result").cloned().ok_or_else(|| {
         AppError::new(
-            "PLUGIN_PROCESS_PROTOCOL_ERROR",
-            "process plugin response was missing result",
+            "PLUGIN_EXTENSION_HOST_PROCESS_PROTOCOL_ERROR",
+            "extension host process response was missing result",
         )
     })
 }
@@ -549,7 +546,7 @@ mod tests {
 
     struct EchoHostHandler;
 
-    impl JsonRpcHostMethodHandler for EchoHostHandler {
+    impl ExtensionHostMethodHandler for EchoHostHandler {
         fn handle_host_method(&self, method: &str, params: JsonValue) -> AppResult<JsonValue> {
             Ok(json!({
                 "method": method,
@@ -565,8 +562,8 @@ mod tests {
         (dir, path)
     }
 
-    fn node_config(script_path: &std::path::Path) -> ProcessRuntimeConfig {
-        ProcessRuntimeConfig {
+    fn node_config(script_path: &std::path::Path) -> ExtensionHostProcessConfig {
+        ExtensionHostProcessConfig {
             program: "node".to_string(),
             args: vec![script_path.display().to_string()],
             start_timeout: Duration::from_secs(5),
@@ -580,7 +577,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plugin_process_runtime_poc_handles_valid_json_rpc_hook() {
+    async fn extension_host_process_handles_valid_json_rpc_hook() {
         let (_dir, script) = write_node_plugin(
             r#"
             console.log(JSON.stringify({jsonrpc:"2.0", method:"plugin.ready"}));
@@ -602,9 +599,9 @@ mod tests {
             });
             "#,
         );
-        let mut runtime = JsonRpcProcessRuntime::start(node_config(&script))
+        let mut runtime = ExtensionHostChildProcess::start(node_config(&script))
             .await
-            .expect("start process runtime");
+            .expect("start extension host process");
 
         let response = runtime
             .call_hook(json!({"hook": "gateway.request.afterBodyRead", "context": {}}))
@@ -619,7 +616,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plugin_process_runtime_handles_host_call_before_final_response() {
+    async fn extension_host_process_handles_host_call_before_final_response() {
         let (_dir, script) = write_node_plugin(
             r#"
             console.log(JSON.stringify({jsonrpc:"2.0", method:"plugin.ready"}));
@@ -655,9 +652,9 @@ mod tests {
         );
         let mut config = node_config(&script);
         config.host_handler = Some(Arc::new(EchoHostHandler));
-        let mut runtime = JsonRpcProcessRuntime::start(config)
+        let mut runtime = ExtensionHostChildProcess::start(config)
             .await
-            .expect("start process runtime");
+            .expect("start extension host process");
 
         let response = runtime
             .call_method(
@@ -680,7 +677,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plugin_process_runtime_poc_does_not_inherit_host_environment() {
+    async fn extension_host_process_does_not_inherit_host_environment() {
         std::env::set_var("AIO_PLUGIN_RUNTIME_SECRET_FOR_TEST", "host-secret");
         let (_dir, script) = write_node_plugin(
             r#"
@@ -709,9 +706,9 @@ mod tests {
             });
             "#,
         );
-        let mut runtime = JsonRpcProcessRuntime::start(node_config(&script))
+        let mut runtime = ExtensionHostChildProcess::start(node_config(&script))
             .await
-            .expect("start process runtime");
+            .expect("start extension host process");
 
         let response = runtime
             .call_hook(json!({"hook": "gateway.request.afterBodyRead", "context": {}}))
@@ -724,7 +721,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plugin_process_runtime_poc_reports_start_timeout() {
+    async fn extension_host_process_reports_start_timeout() {
         let (_dir, script) = write_node_plugin(
             r#"
             setTimeout(() => {
@@ -735,15 +732,17 @@ mod tests {
         let mut config = node_config(&script);
         config.start_timeout = Duration::from_millis(50);
 
-        let err = JsonRpcProcessRuntime::start(config)
+        let err = ExtensionHostChildProcess::start(config)
             .await
             .expect_err("start timeout fails");
 
-        assert!(err.to_string().contains("PLUGIN_PROCESS_START_TIMEOUT"));
+        assert!(err
+            .to_string()
+            .contains("PLUGIN_EXTENSION_HOST_PROCESS_START_TIMEOUT"));
     }
 
     #[tokio::test]
-    async fn plugin_process_runtime_poc_reports_hook_timeout_and_kills_child() {
+    async fn extension_host_process_reports_hook_timeout_and_kills_child() {
         let (_dir, script) = write_node_plugin(
             r#"
             console.log(JSON.stringify({jsonrpc:"2.0", method:"plugin.ready"}));
@@ -752,42 +751,46 @@ mod tests {
         );
         let mut config = node_config(&script);
         config.hook_timeout = Duration::from_millis(50);
-        let mut runtime = JsonRpcProcessRuntime::start(config)
+        let mut runtime = ExtensionHostChildProcess::start(config)
             .await
-            .expect("start process runtime");
+            .expect("start extension host process");
 
         let err = runtime
             .call_hook(json!({"hook": "gateway.request.afterBodyRead", "context": {}}))
             .await
             .expect_err("hook timeout fails");
 
-        assert!(err.to_string().contains("PLUGIN_PROCESS_HOOK_TIMEOUT"));
+        assert!(err
+            .to_string()
+            .contains("PLUGIN_EXTENSION_HOST_PROCESS_HOOK_TIMEOUT"));
         assert!(!runtime.is_running());
     }
 
     #[tokio::test]
-    async fn plugin_process_runtime_poc_reports_crash_without_host_panic() {
+    async fn extension_host_process_reports_crash_without_host_panic() {
         let (_dir, script) = write_node_plugin(
             r#"
             console.log(JSON.stringify({jsonrpc:"2.0", method:"plugin.ready"}));
             process.exit(7);
             "#,
         );
-        let mut runtime = JsonRpcProcessRuntime::start(node_config(&script))
+        let mut runtime = ExtensionHostChildProcess::start(node_config(&script))
             .await
-            .expect("start process runtime");
+            .expect("start extension host process");
 
         let err = runtime
             .call_hook(json!({"hook": "gateway.request.afterBodyRead", "context": {}}))
             .await
             .expect_err("crashed child fails hook");
 
-        assert!(err.to_string().contains("PLUGIN_PROCESS_CRASHED"));
+        assert!(err
+            .to_string()
+            .contains("PLUGIN_EXTENSION_HOST_PROCESS_CRASHED"));
         assert!(!runtime.is_running());
     }
 
     #[tokio::test]
-    async fn plugin_process_runtime_rejects_oversized_response_without_full_line_buffering() {
+    async fn extension_host_process_rejects_oversized_response_without_full_line_buffering() {
         let (_dir, script) = write_node_plugin(
             r#"
             console.log(JSON.stringify({jsonrpc:"2.0", method:"plugin.ready"}));
@@ -799,21 +802,24 @@ mod tests {
         );
         let mut config = node_config(&script);
         config.max_line_bytes = 512;
-        let mut runtime = JsonRpcProcessRuntime::start(config)
+        let mut runtime = ExtensionHostChildProcess::start(config)
             .await
-            .expect("start process runtime");
+            .expect("start extension host process");
 
         let err = runtime
             .call_method("plugin.handleHook", json!({}))
             .await
             .expect_err("oversized response fails");
 
-        assert_eq!(err.code(), "PLUGIN_PROCESS_RESPONSE_TOO_LARGE");
+        assert_eq!(
+            err.code(),
+            "PLUGIN_EXTENSION_HOST_PROCESS_RESPONSE_TOO_LARGE"
+        );
         assert!(!runtime.is_running());
     }
 
     #[tokio::test]
-    async fn plugin_process_runtime_poc_recycles_idle_child() {
+    async fn extension_host_process_recycles_idle_child() {
         let (_dir, script) = write_node_plugin(
             r#"
             console.log(JSON.stringify({jsonrpc:"2.0", method:"plugin.ready"}));
@@ -822,9 +828,9 @@ mod tests {
         );
         let mut config = node_config(&script);
         config.idle_recycle = Duration::from_millis(10);
-        let mut runtime = JsonRpcProcessRuntime::start(config)
+        let mut runtime = ExtensionHostChildProcess::start(config)
             .await
-            .expect("start process runtime");
+            .expect("start extension host process");
 
         tokio::time::sleep(Duration::from_millis(30)).await;
         let recycled = runtime.recycle_if_idle().await.expect("idle recycle");
@@ -834,12 +840,14 @@ mod tests {
     }
 
     #[test]
-    fn plugin_process_runtime_maps_broken_pipe_write_to_crash() {
-        let err = process_write_error(
-            "write process plugin request",
+    fn extension_host_process_maps_broken_pipe_write_to_crash() {
+        let err = extension_host_process_write_error(
+            "write extension host process request",
             std::io::Error::new(ErrorKind::BrokenPipe, "closed pipe"),
         );
 
-        assert!(err.to_string().contains("PLUGIN_PROCESS_CRASHED"));
+        assert!(err
+            .to_string()
+            .contains("PLUGIN_EXTENSION_HOST_PROCESS_CRASHED"));
     }
 }

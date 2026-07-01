@@ -20,7 +20,6 @@ import {
   pluginPreviewUpdateFromFile,
   pluginExportReplayFixture,
   pluginQuarantineRevoked,
-  pluginRevokePermission,
   pluginRollback,
   pluginSaveConfig,
   pluginUninstall,
@@ -28,6 +27,7 @@ import {
 } from "../../services/plugins";
 import { createQueryWrapper, createTestQueryClient } from "../../test/utils/reactQuery";
 import { pluginContributionKeys, pluginKeys } from "../keys";
+import * as pluginQueries from "../plugins";
 import {
   usePluginActiveContributionsQuery,
   usePluginDisableMutation,
@@ -44,7 +44,6 @@ import {
   usePluginQuery,
   usePluginQuarantineRevokedMutation,
   usePluginExportReplayFixtureMutation,
-  usePluginRevokePermissionMutation,
   usePluginRollbackMutation,
   usePluginRuntimeReportsQuery,
   usePluginsListQuery,
@@ -78,7 +77,6 @@ vi.mock("../../services/plugins", async () => {
     pluginDisable: vi.fn(),
     pluginUninstall: vi.fn(),
     pluginSaveConfig: vi.fn(),
-    pluginRevokePermission: vi.fn(),
   };
 });
 
@@ -180,6 +178,11 @@ function activeContributions(
 }
 
 describe("query/plugins", () => {
+  it("does not expose manual permission mutation hooks", () => {
+    expect("usePluginGrantPermissionsMutation" in pluginQueries).toBe(false);
+    expect("usePluginRevokePermissionMutation" in pluginQueries).toBe(false);
+  });
+
   it("uses stable list and detail query keys", async () => {
     vi.mocked(pluginList).mockResolvedValue([summary()]);
     vi.mocked(pluginGet).mockResolvedValue(detail());
@@ -524,7 +527,6 @@ describe("query/plugins", () => {
     vi.mocked(pluginDisable).mockResolvedValue(next);
     vi.mocked(pluginUninstall).mockResolvedValue(next);
     vi.mocked(pluginSaveConfig).mockResolvedValue(next);
-    vi.mocked(pluginRevokePermission).mockResolvedValue(next);
 
     const client = createTestQueryClient();
     const invalidateSpy = vi.spyOn(client, "invalidateQueries");
@@ -555,13 +557,6 @@ describe("query/plugins", () => {
     const { result: saveConfigResult } = renderHook(() => usePluginSaveConfigMutation(), {
       wrapper,
     });
-    const { result: revokePermissionResult } = renderHook(
-      () => usePluginRevokePermissionMutation(),
-      {
-        wrapper,
-      }
-    );
-
     await act(async () => {
       await enableResult.current.mutateAsync("community.prompt-helper");
       await installFromFileResult.current.mutateAsync("/tmp/plugin.aio-plugin");
@@ -582,10 +577,6 @@ describe("query/plugins", () => {
       await saveConfigResult.current.mutateAsync({
         pluginId: "community.prompt-helper",
         config: { mode: "append_instruction" },
-      });
-      await revokePermissionResult.current.mutateAsync({
-        pluginId: "community.prompt-helper",
-        permission: "request.body.write",
       });
     });
 

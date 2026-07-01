@@ -64,7 +64,6 @@ pub struct PluginManifest {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum PluginRuntime {
     ExtensionHost { language: String },
-    Native { engine: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
@@ -536,9 +535,6 @@ pub fn validate_manifest(
         PluginRuntime::ExtensionHost { language } => {
             validate_extension_host_manifest(manifest, language)?;
         }
-        PluginRuntime::Native { .. } => {
-            return unsupported_runtime("native runtime is not supported")
-        }
     }
     validate_config_schema(manifest.config_schema.as_ref())?;
     validate_host_compatibility(&manifest.host_compatibility, host_version)?;
@@ -553,9 +549,6 @@ pub fn validate_manifest_for_official_plugin(
     match &manifest.runtime {
         PluginRuntime::ExtensionHost { language } => {
             validate_extension_host_manifest(manifest, language)?;
-        }
-        PluginRuntime::Native { .. } => {
-            return unsupported_runtime("native runtime is not supported");
         }
     }
     validate_config_schema(manifest.config_schema.as_ref())?;
@@ -594,20 +587,14 @@ pub fn permission_risk(permission: &str) -> Option<PluginPermissionRisk> {
 }
 
 pub fn manifest_effective_permissions(manifest: &PluginManifest) -> Vec<String> {
-    match &manifest.runtime {
-        PluginRuntime::ExtensionHost { .. } => extension_host_effective_permissions(manifest),
-        PluginRuntime::Native { .. } => Vec::new(),
-    }
+    extension_host_effective_permissions(manifest)
 }
 
 pub fn gateway_hook_effective_permissions(
     manifest: &PluginManifest,
     hook_name: &str,
 ) -> Vec<String> {
-    match &manifest.runtime {
-        PluginRuntime::ExtensionHost { .. } => extension_host_hook_permissions(manifest, hook_name),
-        PluginRuntime::Native { .. } => Vec::new(),
-    }
+    extension_host_hook_permissions(manifest, hook_name)
 }
 
 pub fn manifest_permission_risk(manifest: &PluginManifest) -> PluginPermissionRisk {
@@ -763,13 +750,6 @@ fn validate_extension_host_manifest(
     validate_capabilities(&manifest.capabilities)?;
     validate_capability_dependencies(manifest.contributes.as_ref(), &manifest.capabilities)?;
     Ok(())
-}
-
-fn unsupported_runtime(reason: &str) -> Result<(), PluginValidationError> {
-    Err(PluginValidationError::new(
-        "PLUGIN_UNSUPPORTED_RUNTIME",
-        reason,
-    ))
 }
 
 fn validate_activation_events(activation_events: &[String]) -> Result<(), PluginValidationError> {
@@ -1341,7 +1321,22 @@ mod tests {
             "engine": "hostPrivateRedactor"
         });
 
-        assert_manifest_validation_error(raw, "PLUGIN_UNSUPPORTED_RUNTIME");
+        assert_unsupported_or_unknown_runtime(raw);
+    }
+
+    #[test]
+    fn native_runtime_is_not_a_public_manifest_runtime() {
+        let mut raw = valid_manifest();
+        raw["runtime"] = serde_json::json!({
+            "kind": "native",
+            "engine": "hostPrivateRedactor"
+        });
+
+        let manifest = serde_json::from_value::<PluginManifest>(raw);
+        assert!(manifest
+            .expect_err("native must not deserialize as a public PluginRuntime")
+            .to_string()
+            .contains("unknown variant"),);
     }
 
     #[test]
@@ -1779,48 +1774,14 @@ mod tests {
     }
 
     #[test]
-    fn official_privacy_filter_native_runtime_is_rejected() {
+    fn official_privacy_filter_native_runtime_is_not_a_public_manifest_runtime() {
         let mut official = valid_manifest();
         official["id"] = serde_json::json!("official.privacy-filter");
         official["runtime"] = serde_json::json!({
             "kind": "native",
             "engine": "hostPrivateRedactor"
         });
-        let manifest: PluginManifest = serde_json::from_value(official).unwrap();
 
-        let err = validate_manifest_for_official_plugin(&manifest, "0.62.0")
-            .expect_err("official native privacy filter runtime must not be allowed");
-
-        assert_eq!(err.code, "PLUGIN_UNSUPPORTED_RUNTIME");
-    }
-
-    #[test]
-    fn official_manifest_validation_rejects_spoofed_native_privacy_filter_id() {
-        let mut raw = valid_manifest();
-        raw["id"] = serde_json::json!("community.privacy-filter");
-        raw["runtime"] = serde_json::json!({
-            "kind": "native",
-            "engine": "hostPrivateRedactor"
-        });
-        let manifest: PluginManifest = serde_json::from_value(raw).unwrap();
-
-        let err = validate_manifest_for_official_plugin(&manifest, "0.56.0").unwrap_err();
-
-        assert_eq!(err.code, "PLUGIN_UNSUPPORTED_RUNTIME");
-    }
-
-    #[test]
-    fn official_manifest_validation_rejects_wrong_native_privacy_filter_engine() {
-        let mut raw = valid_manifest();
-        raw["id"] = serde_json::json!("official.privacy-filter");
-        raw["runtime"] = serde_json::json!({
-            "kind": "native",
-            "engine": "otherEngine"
-        });
-        let manifest: PluginManifest = serde_json::from_value(raw).unwrap();
-
-        let err = validate_manifest_for_official_plugin(&manifest, "0.56.0").unwrap_err();
-
-        assert_eq!(err.code, "PLUGIN_UNSUPPORTED_RUNTIME");
+        assert_unsupported_or_unknown_runtime(official);
     }
 }

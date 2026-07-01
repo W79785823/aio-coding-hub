@@ -981,7 +981,6 @@ INSERT INTO plugin_market_sources(
     fn local_preview_policy_matches_local_install_policy() {
         let policy = local_plugin_preview_policy();
 
-        assert!(!policy.allow_unsigned);
         assert!(!policy.developer_mode);
         assert!(policy.expected_plugin_id.is_none());
         assert!(policy.expected_checksum.is_none());

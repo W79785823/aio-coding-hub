@@ -96,18 +96,6 @@ function clampRuntimeReportLimit(limit: number | null | undefined): number {
   return Math.min(PLUGIN_RUNTIME_REPORT_MAX_LIMIT, Math.max(1, Math.trunc(limit)));
 }
 
-function normalizePermissions(permissions: readonly string[]): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const raw of permissions) {
-    const permission = raw.trim();
-    if (!permission || seen.has(permission)) continue;
-    seen.add(permission);
-    out.push(permission);
-  }
-  return out;
-}
-
 export async function pluginList() {
   return invokeGeneratedIpc<PluginSummary[]>({
     title: "读取插件列表失败",
@@ -307,38 +295,6 @@ export async function pluginSaveConfig(pluginId: string, config: JsonValue) {
     cmd: "plugin_save_config",
     args: { pluginId: normalizedPluginId, config },
     invoke: async () => commands.pluginSaveConfig({ pluginId: normalizedPluginId, config }),
-  });
-}
-
-export async function pluginGrantPermissions(pluginId: string, permissions: readonly string[]) {
-  const normalizedPluginId = normalizePluginId(pluginId);
-  const normalizedPermissions = normalizePermissions(permissions);
-
-  return invokeGeneratedIpc<PluginDetail>({
-    title: "授权插件权限失败",
-    cmd: "plugin_grant_permissions",
-    args: { pluginId: normalizedPluginId, permissions: normalizedPermissions },
-    invoke: async () =>
-      commands.pluginGrantPermissions({
-        pluginId: normalizedPluginId,
-        permissions: normalizedPermissions,
-      }),
-  });
-}
-
-export async function pluginRevokePermission(pluginId: string, permission: string) {
-  const normalizedPluginId = normalizePluginId(pluginId);
-  const normalizedPermission = normalizeRequiredText("permission", permission);
-
-  return invokeGeneratedIpc<PluginDetail>({
-    title: "撤销插件权限失败",
-    cmd: "plugin_revoke_permission",
-    args: { pluginId: normalizedPluginId, permission: normalizedPermission },
-    invoke: async () =>
-      commands.pluginRevokePermission({
-        pluginId: normalizedPluginId,
-        permission: normalizedPermission,
-      }),
   });
 }
 

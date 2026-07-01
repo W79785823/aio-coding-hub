@@ -66,10 +66,28 @@ function makeRoot(name) {
   mkdirSync(join(root, "docs/plugins/reference"), { recursive: true });
   mkdirSync(join(root, "docs/plugins/runtime"), { recursive: true });
   mkdirSync(join(root, "packages/plugin-sdk/src"), { recursive: true });
-  mkdirSync(join(root, "packages/plugin-wasm-sdk/src"), { recursive: true });
   mkdirSync(join(root, "packages/create-aio-plugin/src"), { recursive: true });
+  mkdirSync(join(root, "src/services"), { recursive: true });
+  mkdirSync(join(root, "src/query"), { recursive: true });
+  mkdirSync(join(root, "src/generated"), { recursive: true });
+  mkdirSync(join(root, "src-tauri/src/app/plugins"), { recursive: true });
   mkdirSync(join(root, "src-tauri/src/domain"), { recursive: true });
   mkdirSync(join(root, "src-tauri/src/gateway/plugins"), { recursive: true });
+  writeFileSync(
+    join(root, "src/generated/bindings.ts"),
+    'export type PluginRuntime = { kind: "extensionHost"; language: string };\n'
+  );
+  writeFileSync(
+    join(root, "src-tauri/src/app/plugins/mod.rs"),
+    "pub(crate) mod extension_host;\npub(crate) mod extension_host_process;\n"
+  );
+  writeFileSync(
+    join(root, "src-tauri/Cargo.toml"),
+    "[dependencies]\nrquickjs = \"0.12.0\"\n[dev-dependencies]\ntempfile = \"3\"\n"
+  );
+  writeFileSync(join(root, "package.json"), "{ \"scripts\": {} }\n");
+  writeFileSync(join(root, "src/services/plugins.ts"), "export function pluginEnable() {}\n");
+  writeFileSync(join(root, "src/query/plugins.ts"), "export function usePluginEnableMutation() {}\n");
   return root;
 }
 
@@ -314,10 +332,6 @@ function writePassingScaffold(root) {
     "extensionHost wasm process native privacyFilter"
   );
   writeFileSync(join(root, "docs/plugins/runtime/wasm.md"), "wasm PLUGIN_RUNTIME_DISABLED");
-  writeFileSync(
-    join(root, "packages/plugin-wasm-sdk/src/lib.rs"),
-    'request_body #[serde(rename_all = "camelCase")]'
-  );
   writePassingManifestDocs(root);
   writePassingDevtools(root);
 }
@@ -409,6 +423,66 @@ const extensionHostDependencyBaselineResult = runCheck(extensionHostDependencyBa
 if (extensionHostDependencyBaselineResult.status !== 0) {
   throw new Error(
     `expected Extension Host dependency baseline to pass, got status ${extensionHostDependencyBaselineResult.status}\n${extensionHostDependencyBaselineResult.stderr}`
+  );
+}
+
+const reservedHostMediatedLabelDriftRoot = makeRoot("reserved-host-mediated-label-drift");
+writeJson(reservedHostMediatedLabelDriftRoot, "docs/plugins/plugin-api-v1-contract.json", {
+  apiVersion: "1.0.0",
+  defaultHookTimeoutMs: 150,
+  defaultFailurePolicy: "fail-open",
+  activeHooks: [
+    "gateway.request.afterBodyRead",
+    "gateway.request.beforeSend",
+    "gateway.response.chunk",
+  ],
+  reservedHooks: ["gateway.response.headers"],
+  activeMutationFields: ["requestBody", "streamChunk"],
+  configSchemaTypes: ["object"],
+  capabilities: ["network.fetch"],
+  activePermissions: [
+    "request.meta.read",
+    "request.header.read",
+    "request.header.readSensitive",
+    "request.body.read",
+    "request.body.write",
+    "stream.inspect",
+    "stream.modify",
+    "network.fetch",
+  ],
+  reservedPermissions: ["network.fetch"],
+  capabilityDependencies: {
+    commands: ["commands.execute"],
+    providers: ["provider.extensionValues"],
+    "ui.providers.editor.sections": ["provider.extensionValues"],
+    "ui.providers.editor.fields": ["provider.extensionValues"],
+    "ui.buttonCommandFields": ["commands.execute"],
+    gatewayHooks: ["gateway.hooks"],
+    protocolBridges: ["protocol.bridge"],
+  },
+  hookMatrix: JSON.parse(
+    readFileSync(
+      join(extensionHostDependencyBaselineRoot, "docs/plugins/plugin-api-v1-contract.json"),
+      "utf8"
+    )
+  ).hookMatrix,
+  communityRuntimes: ["extensionHost"],
+  unsupportedLegacyRuntimes: ["wasm", "process", "native"],
+});
+writePassingScaffold(reservedHostMediatedLabelDriftRoot);
+
+const reservedHostMediatedLabelDriftResult = runCheck(reservedHostMediatedLabelDriftRoot);
+if (
+  reservedHostMediatedLabelDriftResult.status === 0 ||
+  !reservedHostMediatedLabelDriftResult.stderr.includes(
+    "capabilities must not include reserved host-mediated label network.fetch"
+  ) ||
+  !reservedHostMediatedLabelDriftResult.stderr.includes(
+    "activePermissions must not include reserved host-mediated label network.fetch"
+  )
+) {
+  throw new Error(
+    `expected reserved host-mediated label drift failure, got status ${reservedHostMediatedLabelDriftResult.status}\n${reservedHostMediatedLabelDriftResult.stderr}`
   );
 }
 
@@ -913,10 +987,6 @@ writeFileSync(
 writeFileSync(
   join(partialDevtoolsMetadataRoot, "docs/plugins/reference/permissions.md"),
   "request.meta.read request.body.read network.fetch"
-);
-writeFileSync(
-  join(partialDevtoolsMetadataRoot, "packages/plugin-wasm-sdk/src/lib.rs"),
-  'request_body headers #[serde(rename_all = "camelCase")]'
 );
 writeFileSync(
   join(partialDevtoolsMetadataRoot, "packages/create-aio-plugin/src/devtools.ts"),

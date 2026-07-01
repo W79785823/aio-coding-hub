@@ -260,13 +260,6 @@ fn extract_zip_bytes(
 }
 
 fn validate_extension_main(root_dir: &Path, manifest: &PluginManifest) -> AppResult<()> {
-    if !matches!(
-        manifest.runtime,
-        crate::domain::plugins::PluginRuntime::ExtensionHost { .. }
-    ) {
-        return Ok(());
-    }
-
     let main = manifest.main.as_deref().ok_or_else(|| {
         AppError::new(
             "PLUGIN_EXTENSION_MAIN_MISSING",
@@ -413,10 +406,6 @@ fn reject_unsupported_manifest_runtime(manifest_bytes: &[u8]) -> AppResult<()> {
             format!("failed to parse plugin package manifest: {error}"),
         )
     })?;
-    let plugin_id = raw
-        .get("id")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
     let Some(kind) = raw
         .get("runtime")
         .and_then(|runtime| runtime.get("kind"))
@@ -426,8 +415,7 @@ fn reject_unsupported_manifest_runtime(manifest_bytes: &[u8]) -> AppResult<()> {
     };
 
     match kind {
-        "wasm" | "process" => Err(unsupported_runtime_error(kind)),
-        "native" if plugin_id != "official.privacy-filter" => Err(unsupported_runtime_error(kind)),
+        "native" | "wasm" | "process" => Err(unsupported_runtime_error(kind)),
         _ => Ok(()),
     }
 }

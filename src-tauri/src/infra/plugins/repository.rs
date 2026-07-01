@@ -2,7 +2,7 @@ use crate::db;
 use crate::domain::plugins::{
     manifest_permission_risk, validate_manifest, validate_manifest_for_official_plugin,
     PluginAuditLog, PluginDetail, PluginInstallSource, PluginManifest, PluginPermissionRisk,
-    PluginRuntime, PluginRuntimeFailure, PluginStatus, PluginSummary,
+    PluginRuntimeFailure, PluginStatus, PluginSummary,
 };
 use crate::shared::error::{db_err, AppResult};
 use crate::shared::time::now_unix_seconds;
@@ -770,25 +770,19 @@ fn detail_from_row(row: &rusqlite::Row<'_>) -> Result<PluginDetailRow, rusqlite:
 }
 
 fn runtime_name(manifest: &PluginManifest) -> String {
-    match manifest.runtime {
-        PluginRuntime::ExtensionHost { .. } => "extensionHost".to_string(),
-        PluginRuntime::Native { ref engine } => format!("native:{engine}"),
-    }
+    let _ = manifest;
+    "extensionHost".to_string()
 }
 
 fn legacy_runtime_name(manifest_json: &str) -> Option<String> {
     let raw: serde_json::Value = serde_json::from_str(manifest_json).ok()?;
-    let plugin_id = raw
-        .get("id")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
     let kind = raw
         .get("runtime")
         .and_then(|runtime| runtime.get("kind"))
         .and_then(serde_json::Value::as_str)?;
     match kind {
         "wasm" | "process" => Some(kind.to_string()),
-        "native" if plugin_id != "official.privacy-filter" => raw
+        "native" => raw
             .get("runtime")
             .and_then(|runtime| runtime.get("engine"))
             .and_then(serde_json::Value::as_str)

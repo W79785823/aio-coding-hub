@@ -1397,10 +1397,8 @@ fn plugin_hook(plugin: &PluginDetail, hook_name: GatewayPluginHookName) -> Optio
 }
 
 fn runtime_kind(plugin: &PluginDetail) -> String {
-    match &plugin.manifest.runtime {
-        crate::domain::plugins::PluginRuntime::ExtensionHost { .. } => "extensionHost".to_string(),
-        crate::domain::plugins::PluginRuntime::Native { engine } => format!("native:{engine}"),
-    }
+    let _ = plugin;
+    "extensionHost".to_string()
 }
 
 fn duration_ms_i64(started: Instant) -> i64 {

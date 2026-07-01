@@ -85,12 +85,6 @@ pub(crate) async fn execute_plugin_command(
             ),
         ));
     }
-    if !matches!(detail.manifest.runtime, PluginRuntime::ExtensionHost { .. }) {
-        return Err(AppError::new(
-            "PLUGIN_COMMAND_RUNTIME_UNSUPPORTED",
-            format!("plugin command {command} is not backed by an extension host runtime"),
-        ));
-    }
     let plugin_id = detail.summary.plugin_id.clone();
     let trace_id = args
         .get("traceId")
@@ -373,13 +367,8 @@ fn is_unsupported_legacy_runtime_summary(runtime: &str) -> bool {
     matches!(runtime, "wasm" | "process" | "native") || runtime.starts_with("native:")
 }
 
-fn is_unsupported_native_runtime_detail(detail: &PluginDetail) -> bool {
-    matches!(detail.manifest.runtime, PluginRuntime::Native { .. })
-}
-
 fn is_unsupported_legacy_runtime_detail(detail: &PluginDetail) -> bool {
     is_unsupported_legacy_runtime_summary(&detail.summary.runtime)
-        || is_unsupported_native_runtime_detail(detail)
         || matches!(detail.manifest.runtime, PluginRuntime::ExtensionHost { .. })
             && detail.manifest.main.as_deref() == Some("legacy/unsupported.js")
 }
@@ -517,7 +506,6 @@ pub(crate) struct LocalPackageInstallPolicy {
     pub(crate) expected_checksum: Option<String>,
     pub(crate) signature: Option<String>,
     pub(crate) public_key: Option<String>,
-    pub(crate) allow_unsigned: bool,
     pub(crate) developer_mode: bool,
     pub(crate) install_source: PluginInstallSource,
     pub(crate) remote_source_url: Option<String>,
@@ -531,7 +519,6 @@ impl Default for LocalPackageInstallPolicy {
             expected_checksum: None,
             signature: None,
             public_key: None,
-            allow_unsigned: false,
             developer_mode: false,
             install_source: PluginInstallSource::Local,
             remote_source_url: None,
@@ -755,16 +742,6 @@ fn runtime_lifecycle_summary(
             label: "Extension Host".to_string(),
             supported: true,
             blocking_reasons: Vec::new(),
-        },
-        PluginRuntime::Native { engine } => PluginRuntimeLifecycleSummary {
-            kind: "native".to_string(),
-            label: format!("Native ({engine})"),
-            supported: false,
-            blocking_reasons: vec![lifecycle_notice(
-                "error",
-                "PLUGIN_NATIVE_RUNTIME_UNSUPPORTED",
-                "third-party native plugin runtime is not supported",
-            )],
         },
     }
 }
@@ -1719,7 +1696,6 @@ pub(crate) fn install_plugin_from_remote_package_bytes(
             expected_checksum: Some(expected_checksum),
             signature,
             public_key,
-            allow_unsigned: false,
             developer_mode: false,
             install_source,
             remote_source_url: Some(source_url.to_string()),
@@ -1842,7 +1818,6 @@ fn local_policy_for_remote_package(
         expected_checksum: Some(policy.expected_checksum.clone()),
         signature: policy.signature.clone(),
         public_key,
-        allow_unsigned: false,
         developer_mode: false,
         install_source: policy.install_source,
         remote_source_url: Some(source_url.to_string()),
@@ -2049,29 +2024,10 @@ pub(crate) fn quarantine_revoked_plugin(
 }
 
 fn enforce_unsigned_install_policy(
-    manifest: &PluginManifest,
-    policy: &LocalPackageInstallPolicy,
-    trust: PackageTrust,
+    _manifest: &PluginManifest,
+    _policy: &LocalPackageInstallPolicy,
+    _trust: PackageTrust,
 ) -> AppResult<()> {
-    if matches!(manifest.runtime, PluginRuntime::ExtensionHost { .. }) {
-        return Ok(());
-    }
-    if trust.signature_verified {
-        return Ok(());
-    }
-    if !policy.allow_unsigned || !policy.developer_mode {
-        for permission in &manifest.permissions {
-            if matches!(
-                permission_risk(permission),
-                Some(PluginPermissionRisk::High | PluginPermissionRisk::Critical)
-            ) {
-                return Err(AppError::new(
-                    "PLUGIN_UNSIGNED_HIGH_RISK_PERMISSION",
-                    format!("unsigned plugin cannot request high-risk permission: {permission}"),
-                ));
-            }
-        }
-    }
     Ok(())
 }
 
@@ -2308,10 +2264,6 @@ pub(crate) fn revoke_plugin_permission(
 fn ensure_runtime_enabled(manifest: &PluginManifest) -> AppResult<()> {
     match &manifest.runtime {
         PluginRuntime::ExtensionHost { .. } => Ok(()),
-        PluginRuntime::Native { .. } => Err(AppError::new(
-            "PLUGIN_UNSUPPORTED_RUNTIME",
-            "native runtime is reserved for official plugins",
-        )),
     }
 }
 
@@ -2683,9 +2635,7 @@ fn validate_enum(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::plugins::{
-        PluginInstallSource, PluginManifest, PluginRuntime, PluginStatus,
-    };
+    use crate::domain::plugins::{PluginInstallSource, PluginManifest, PluginStatus};
     use crate::gateway::plugins::context::{GatewayPluginHookName, GatewayRequestHookInput};
     use crate::gateway::plugins::pipeline::{GatewayPluginPipeline, GatewayPluginPipelineConfig};
     use std::io::Write;
@@ -2728,16 +2678,6 @@ mod tests {
             }
         }))
         .unwrap()
-    }
-
-    fn community_native_manifest(plugin_id: &str) -> PluginManifest {
-        let mut manifest = manifest();
-        manifest.id = plugin_id.to_string();
-        manifest.name = "Native Policy Plugin".to_string();
-        manifest.runtime = PluginRuntime::Native {
-            engine: "hostPrivateRedactor".to_string(),
-        };
-        manifest
     }
 
     fn extension_manifest(plugin_id: &str, command: &str) -> PluginManifest {
@@ -3220,16 +3160,6 @@ mod tests {
     }
 
     #[test]
-    fn runtime_enabled_rejects_non_official_native_runtime() {
-        let manifest = community_native_manifest("acme.native-policy");
-
-        let err = ensure_runtime_enabled(&manifest)
-            .expect_err("community native runtime should not be enabled");
-
-        assert_eq!(err.code(), "PLUGIN_UNSUPPORTED_RUNTIME");
-    }
-
-    #[test]
     fn uninstall_keeps_audit_logs() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
@@ -3458,7 +3388,13 @@ INSERT INTO plugins (
     fn local_native_privacy_filter_db_row_is_disabled_for_ui_and_gateway() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("local-native-plugin.db")).unwrap();
-        let manifest = community_native_manifest("acme.native-privacy-filter");
+        let mut manifest = serde_json::to_value(manifest()).unwrap();
+        manifest["id"] = serde_json::json!("acme.native-privacy-filter");
+        manifest["name"] = serde_json::json!("Native Privacy Filter");
+        manifest["runtime"] = serde_json::json!({
+            "kind": "native",
+            "engine": "hostPrivateRedactor"
+        });
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let now = crate::shared::time::now_unix_seconds();
         db.open_connection()
@@ -4143,7 +4079,6 @@ INSERT INTO plugins (
             &dir.path().join("plugins/cache"),
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -4170,7 +4105,6 @@ INSERT INTO plugins (
             &dir.path().join("plugins/cache"),
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -4226,7 +4160,6 @@ INSERT INTO plugins (
             &dir.path().join("plugins/cache"),
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -4307,7 +4240,6 @@ INSERT INTO plugins (
             &ctx.cache_dir,
             "0.62.0",
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..Default::default()
             },
@@ -4344,7 +4276,6 @@ INSERT INTO plugins (
             &ctx.cache_dir,
             "0.62.0",
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..Default::default()
             },
@@ -4405,7 +4336,6 @@ INSERT INTO plugins (
             &ctx.cache_dir,
             "0.62.0",
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..Default::default()
             },
@@ -4481,7 +4411,6 @@ INSERT INTO plugins (
             &ctx.cache_dir,
             "0.62.0",
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..Default::default()
             },
@@ -4556,7 +4485,6 @@ INSERT INTO plugins (
             &ctx.cache_dir,
             "0.62.0",
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..Default::default()
             },
@@ -4594,7 +4522,6 @@ INSERT INTO plugins (
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -4624,7 +4551,6 @@ INSERT INTO plugins (
             &cache_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -4668,7 +4594,6 @@ INSERT INTO plugins (
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -4686,7 +4611,6 @@ INSERT INTO plugins (
             &cache_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -4708,7 +4632,6 @@ INSERT INTO plugins (
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -4721,7 +4644,6 @@ INSERT INTO plugins (
             &cache_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -4766,7 +4688,6 @@ INSERT INTO plugins (
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -4779,7 +4700,6 @@ INSERT INTO plugins (
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -4792,7 +4712,6 @@ INSERT INTO plugins (
             &cache_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -4811,7 +4730,6 @@ INSERT INTO plugins (
             &cache_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -4846,7 +4764,6 @@ INSERT INTO plugins (
             LocalPackageInstallPolicy {
                 signature: Some(signature_b64),
                 public_key: Some(public_key_b64),
-                allow_unsigned: false,
                 developer_mode: false,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -4956,29 +4873,11 @@ INSERT INTO plugins (
     }
 
     #[test]
-    fn plugin_local_install_rejects_reserved_official_privacy_filter_native_package() {
+    fn plugin_local_install_rejects_reserved_official_privacy_filter_package() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
         let package_path = dir.path().join("fake-official-privacy-filter.aio-plugin");
-        let mut manifest = local_package_manifest("official.privacy-filter", "1.0.0");
-        manifest["runtime"] = serde_json::json!({
-            "kind": "native",
-            "engine": "hostPrivateRedactor"
-        });
-        manifest["hooks"] = serde_json::json!([
-            {
-                "name": "gateway.request.afterBodyRead",
-                "priority": 10,
-                "failurePolicy": "fail-open"
-            },
-            {
-                "name": "log.beforePersist",
-                "priority": 20,
-                "failurePolicy": "fail-closed"
-            }
-        ]);
-        manifest["permissions"] =
-            serde_json::json!(["request.body.read", "request.body.write", "log.redact"]);
+        let manifest = local_package_manifest("official.privacy-filter", "1.0.0");
         write_local_package(&package_path, manifest);
 
         let err = install_plugin_from_local_package_with_policy(
@@ -4988,7 +4887,6 @@ INSERT INTO plugins (
             &dir.path().join("plugins/installed"),
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5000,7 +4898,7 @@ INSERT INTO plugins (
     }
 
     #[test]
-    fn plugin_local_install_preview_marks_fake_official_native_runtime_unsupported() {
+    fn plugin_local_install_preview_rejects_fake_official_native_runtime() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::init_for_tests(&dir.path().join("plugins.db")).unwrap();
         let package_path = dir
@@ -5027,29 +4925,20 @@ INSERT INTO plugins (
             serde_json::json!(["request.body.read", "request.body.write", "log.redact"]);
         write_local_package(&package_path, manifest);
 
-        let preview = preview_plugin_from_local_package_with_policy(
+        let err = preview_plugin_from_local_package_with_policy(
             &db,
             &package_path,
             &dir.path().join("plugins/cache"),
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
         )
-        .unwrap();
+        .unwrap_err();
 
-        assert!(!preview.runtime.supported);
-        assert!(preview
-            .runtime
-            .blocking_reasons
-            .iter()
-            .any(|notice| notice.code == "PLUGIN_NATIVE_RUNTIME_UNSUPPORTED"));
-        assert!(preview
-            .blocking_reasons
-            .iter()
-            .any(|notice| notice.code == "PLUGIN_RESERVED_OFFICIAL_ID"));
+        assert_eq!(err.code(), "PLUGIN_UNSUPPORTED_RUNTIME");
+        assert!(repository::get_plugin(&db, "official.privacy-filter").is_err());
     }
 
     #[test]
@@ -5072,7 +4961,6 @@ INSERT INTO plugins (
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
                 expected_checksum: Some(invalid_checksum()),
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5192,7 +5080,6 @@ INSERT INTO plugins (
             &dir.path().join("plugins/installed"),
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5527,7 +5414,6 @@ INSERT INTO plugin_market_sources(
             &dir.path().join("plugins/installed"),
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: false,
                 developer_mode: false,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5559,7 +5445,6 @@ INSERT INTO plugin_market_sources(
             &dir.path().join("plugins/installed"),
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5591,7 +5476,6 @@ INSERT INTO plugin_market_sources(
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5612,7 +5496,6 @@ INSERT INTO plugin_market_sources(
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5643,7 +5526,6 @@ INSERT INTO plugin_market_sources(
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5663,7 +5545,6 @@ INSERT INTO plugin_market_sources(
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5699,7 +5580,6 @@ INSERT INTO plugin_market_sources(
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5722,7 +5602,6 @@ INSERT INTO plugin_market_sources(
             LocalPackageInstallPolicy {
                 signature: Some(signature_for_empty_payload),
                 public_key: Some("11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=".to_string()),
-                allow_unsigned: false,
                 developer_mode: false,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5757,7 +5636,6 @@ INSERT INTO plugin_market_sources(
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5770,7 +5648,6 @@ INSERT INTO plugin_market_sources(
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5813,7 +5690,6 @@ INSERT INTO plugin_market_sources(
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5833,7 +5709,6 @@ INSERT INTO plugin_market_sources(
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5880,7 +5755,6 @@ INSERT INTO plugin_market_sources(
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },
@@ -5893,7 +5767,6 @@ INSERT INTO plugin_market_sources(
             &installed_dir,
             env!("CARGO_PKG_VERSION"),
             LocalPackageInstallPolicy {
-                allow_unsigned: true,
                 developer_mode: true,
                 ..LocalPackageInstallPolicy::default()
             },

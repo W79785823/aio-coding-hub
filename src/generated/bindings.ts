@@ -3130,9 +3130,7 @@ export type PluginReplayFixtureSource = {
 };
 export type PluginRevokePermissionInput = { pluginId: string; permission: string };
 export type PluginRollbackInput = { pluginId: string; version: string };
-export type PluginRuntime =
-  | { kind: "extensionHost"; language: string }
-  | { kind: "native"; engine: string };
+export type PluginRuntime = { kind: "extensionHost"; language: string };
 export type PluginRuntimeFailure = {
   id: number;
   plugin_id: string;

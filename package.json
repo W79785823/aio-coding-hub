@@ -32,7 +32,6 @@
     "plugin-sdk:test": "pnpm --filter @aio-coding-hub/plugin-sdk test",
     "plugin-sdk:typecheck": "pnpm --filter @aio-coding-hub/plugin-sdk typecheck",
     "create-aio-plugin:test": "pnpm --filter create-aio-plugin test",
-    "plugin-wasm-sdk:test": "cargo test --manifest-path packages/plugin-wasm-sdk/Cargo.toml && cargo test --manifest-path packages/plugin-wasm-sdk/examples/redactor/Cargo.toml",
     "test:e2e": "vitest run src/e2e",
     "check:support-matrix": "node scripts/support-matrix.mjs check",
     "check:precommit": "pnpm check:precommit:src && pnpm check:precommit:tauri",

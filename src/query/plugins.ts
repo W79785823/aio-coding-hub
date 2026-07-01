@@ -7,7 +7,6 @@ import {
   pluginEnable,
   pluginExecuteCommand,
   pluginGet,
-  pluginGrantPermissions,
   pluginInstallFromFile,
   pluginInstallRemote,
   pluginInstallOfficial,
@@ -20,7 +19,6 @@ import {
   pluginPreviewUpdateFromFile,
   pluginExportReplayFixture,
   pluginQuarantineRevoked,
-  pluginRevokePermission,
   pluginRollback,
   pluginSaveConfig,
   pluginUninstall,
@@ -437,39 +435,6 @@ export function usePluginSaveConfigMutation() {
       }
       queryClient.invalidateQueries({ queryKey: pluginKeys.list() });
       queryClient.invalidateQueries({ queryKey: pluginKeys.detail(normalizedPluginId) });
-    },
-  });
-}
-
-export function usePluginGrantPermissionsMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (input: { pluginId: string; permissions: readonly string[] }) =>
-      pluginGrantPermissions(input.pluginId, input.permissions),
-    onSuccess: (next, input) => {
-      const normalizedPluginId = normalizePluginId(input.pluginId);
-      if (next) {
-        setPluginDetailAndSummary(queryClient, normalizedPluginId, next);
-      }
-      queryClient.invalidateQueries({ queryKey: pluginKeys.list() });
-      queryClient.invalidateQueries({ queryKey: pluginKeys.detail(normalizedPluginId) });
-    },
-  });
-}
-
-export function usePluginRevokePermissionMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (input: { pluginId: string; permission: string }) =>
-      pluginRevokePermission(input.pluginId, input.permission),
-    onSuccess: (next, input) => {
-      const normalizedPluginId = normalizePluginId(input.pluginId);
-      if (next) {
-        queryClient.setQueryData(pluginKeys.detail(normalizedPluginId), next);
-      }
-      refreshPluginQueries(queryClient, normalizedPluginId);
     },
   });
 }

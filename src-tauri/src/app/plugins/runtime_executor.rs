@@ -455,30 +455,6 @@ mod tests {
         .expect("retain should dispose inactive extension host gateway instances");
     }
 
-    #[test]
-    fn runtime_executor_rejects_non_official_privacy_filter_native_runtime() {
-        let executor = RuntimeGatewayPluginExecutor::for_tests();
-        let plugin = plugin_detail(
-            "example.privacy-filter",
-            PluginRuntime::Native {
-                engine: "hostPrivateRedactor".to_string(),
-            },
-            "native:hostPrivateRedactor".to_string(),
-            None,
-        );
-        let context = hook_context("gateway.request.afterBodyRead", "trace-native");
-
-        let err = executor
-            .execute_plugin_sync(&plugin, context)
-            .expect_err("non-official native privacy filter should be rejected");
-
-        assert_eq!(err.code(), "PLUGIN_UNSUPPORTED_RUNTIME");
-        assert_eq!(
-            err.to_string(),
-            "PLUGIN_UNSUPPORTED_RUNTIME: unsupported native plugin runtime engine: hostPrivateRedactor"
-        );
-    }
-
     fn executor() -> RuntimeGatewayPluginExecutor {
         RuntimeGatewayPluginExecutor::for_tests()
     }

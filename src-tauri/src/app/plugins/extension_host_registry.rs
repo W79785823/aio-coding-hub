@@ -654,15 +654,6 @@ impl ExtensionHostInstanceKey {
             PluginRuntime::ExtensionHost { language } => {
                 ("extensionHost".to_string(), language.clone())
             }
-            PluginRuntime::Native { .. } => {
-                return Err(AppError::new(
-                    "PLUGIN_COMMAND_RUNTIME_UNSUPPORTED",
-                    format!(
-                        "plugin {} is not backed by an extension host runtime",
-                        detail.summary.plugin_id
-                    ),
-                ));
-            }
         };
         let main = detail
             .manifest

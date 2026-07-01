@@ -6,7 +6,6 @@ import {
   pluginDisable,
   pluginEnable,
   pluginGet,
-  pluginGrantPermissions,
   pluginInstallFromFile,
   pluginInstallRemote,
   pluginInstallOfficial,
@@ -17,7 +16,6 @@ import {
   pluginParseMarketIndex,
   pluginExportReplayFixture,
   pluginQuarantineRevoked,
-  pluginRevokePermission,
   pluginRollback,
   pluginSaveConfig,
   pluginUninstall,
@@ -39,8 +37,6 @@ vi.mock("../../generated/bindings", () => ({
     pluginDisable: vi.fn(),
     pluginUninstall: vi.fn(),
     pluginSaveConfig: vi.fn(),
-    pluginGrantPermissions: vi.fn(),
-    pluginRevokePermission: vi.fn(),
     pluginListAuditLogs: vi.fn(),
     pluginListExtensionRuntimeReports: vi.fn(),
     pluginListRuntimeReports: vi.fn(),
@@ -127,8 +123,6 @@ describe("services/plugins", () => {
     vi.mocked(commands.pluginDisable).mockResolvedValue({ status: "ok", data: detail });
     vi.mocked(commands.pluginUninstall).mockResolvedValue({ status: "ok", data: detail });
     vi.mocked(commands.pluginSaveConfig).mockResolvedValue({ status: "ok", data: detail });
-    vi.mocked(commands.pluginGrantPermissions).mockResolvedValue({ status: "ok", data: detail });
-    vi.mocked(commands.pluginRevokePermission).mockResolvedValue({ status: "ok", data: detail });
     vi.mocked(commands.pluginListAuditLogs).mockResolvedValue({ status: "ok", data: [] });
     vi.mocked(commands.pluginListExtensionRuntimeReports).mockResolvedValue({
       status: "ok",
@@ -205,13 +199,6 @@ describe("services/plugins", () => {
     await pluginDisable(" community.prompt-helper ");
     await pluginUninstall(" community.prompt-helper ");
     await pluginSaveConfig(" community.prompt-helper ", { mode: "append_instruction" });
-    await pluginGrantPermissions(" community.prompt-helper ", [
-      " request.body.read ",
-      "",
-      "request.body.read",
-      "request.body.write",
-    ]);
-    await pluginRevokePermission(" community.prompt-helper ", " request.body.write ");
     await pluginListAuditLogs({ pluginId: " community.prompt-helper ", limit: 9999 });
     await pluginListRuntimeReports({
       pluginId: " community.prompt-helper ",
@@ -271,14 +258,6 @@ describe("services/plugins", () => {
     expect(commands.pluginSaveConfig).toHaveBeenCalledWith({
       pluginId: "community.prompt-helper",
       config: { mode: "append_instruction" },
-    });
-    expect(commands.pluginGrantPermissions).toHaveBeenCalledWith({
-      pluginId: "community.prompt-helper",
-      permissions: ["request.body.read", "request.body.write"],
-    });
-    expect(commands.pluginRevokePermission).toHaveBeenCalledWith({
-      pluginId: "community.prompt-helper",
-      permission: "request.body.write",
     });
     expect(commands.pluginListAuditLogs).toHaveBeenCalledWith({
       pluginId: "community.prompt-helper",
