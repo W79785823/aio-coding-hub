@@ -205,6 +205,8 @@ jobs:
 
       - name: Rust test
         working-directory: src-tauri
+        env:
+          CARGO_BUILD_JOBS: "1"
         run: cargo test --locked -- --test-threads=1
 
       - name: Install cargo-audit
