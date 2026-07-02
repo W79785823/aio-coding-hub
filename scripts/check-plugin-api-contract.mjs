@@ -69,6 +69,10 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function rustIntegerLiteral(value) {
+  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, "_");
+}
+
 function functionBody(text, functionName) {
   const signature = new RegExp(`function\\s+${escapeRegex(functionName)}\\s*\\(`).exec(text);
   if (!signature) return null;
@@ -528,10 +532,21 @@ if (contract) {
     "runtime"
   );
   requireIncludes(
+    "src-tauri/src/gateway/plugins/contract.rs",
+    readText("src-tauri/src/gateway/plugins/contract.rs"),
+    [
+      `DEFAULT_HOOK_TIMEOUT_MS: u64 = ${rustIntegerLiteral(contract.defaultHookTimeoutMs)}`,
+      'DEFAULT_FAILURE_POLICY: &str = "fail-open"',
+      "timeout_ms: DEFAULT_HOOK_TIMEOUT_MS",
+      "default_failure_policy: DEFAULT_FAILURE_POLICY",
+    ],
+    "default hook contract policy"
+  );
+  requireIncludes(
     "src-tauri/src/gateway/plugins/pipeline.rs",
     readText("src-tauri/src/gateway/plugins/pipeline.rs"),
-    [`Duration::from_millis(${contract.defaultHookTimeoutMs})`, "FailurePolicy::FailOpen"],
-    "default hook policy"
+    ["Duration::from_millis(DEFAULT_HOOK_TIMEOUT_MS)", "FailurePolicy::FailOpen"],
+    "default hook pipeline policy"
   );
 
   const manifestSpec = readText("docs/plugin-manifest-v1.md");

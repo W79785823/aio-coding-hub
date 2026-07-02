@@ -232,7 +232,7 @@ const requiredDocs = [
       "log.beforePersist",
       "plugin_hook_execution_reports",
       "plugin_export_replay_fixture",
-      "默认 vNext hook timeout: 150 ms",
+      "默认 vNext hook timeout: 5000 ms",
     ],
   },
   {
@@ -257,7 +257,7 @@ const requiredDocs = [
       "quarantined",
       "Extension Host",
       "不在 Rust 主进程或 Tauri WebView 执行第三方插件代码",
-      "默认 vNext hook timeout: 150 ms",
+      "默认 vNext hook timeout: 5000 ms",
     ],
   },
   {
