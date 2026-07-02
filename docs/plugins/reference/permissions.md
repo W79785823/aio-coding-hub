@@ -22,7 +22,7 @@ Internal active labels：
 
 Reserved permissions for future host-mediated APIs 只作为内部命名保留，不是 public Extension Host manifest 字段：
 
-- `plugin.storage`：中风险，使用隔离插件存储。
+- `plugin.storage`：中风险，未来宿主中介 storage 标签。当前 active Extension Host capability 是 `storage.plugin`；实现会把 `api.storage` 数据保存在插件配置 JSON 的顶层 `storage` 字段下，大小限制为 64 KiB，还不是独立隔离 KV 表。
 - `network.fetch`：高风险，通过宿主代理发起网络请求。
 - `file.read`：高风险，通过宿主代理读取文件。
 - `file.write`：高风险，通过宿主代理写入文件。

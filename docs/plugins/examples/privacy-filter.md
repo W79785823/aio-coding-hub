@@ -51,7 +51,7 @@ Provider request shapes：
 
 `official.privacy-filter` 会按 `redactionScopes` 选择请求处理范围，并只脱敏协议白名单里的文本字段。默认范围包含系统/开发者指令、用户输入、工具返回结果，以及 legacy `prompt` / raw text bodies。Codex/OpenAI Responses payloads 会处理 `instructions`、`input` string、`input[].content[].text` 和 `function_call_output.output`；Claude-style payloads 会处理 `system`、`messages[].content[].text(type=text)` 和 `tool_result.content`；OpenAI-compatible chat payloads 会处理 `messages[].content` 和 role `tool` 的 content。工具定义、tool schema、tool call arguments、metadata、reasoning/thinking blocks、file/image IDs、URLs 和 base64 data 会保持原样。
 
-Gateway boundary note：Privacy Filter 会接收原始 client-to-gateway body，因为 gateway 必须先看到 prompt 才能脱敏。它的保护保证是：当插件启用并选中匹配策略和处理范围后，gateway-to-upstream provider request body 中的白名单字段和 persisted request logs 会被脱敏。日志脱敏由 `redactLogs` 和 `sensitiveTypes` 控制，不受 request `redactionScopes` 影响。如果你检查 hook 执行前的本地 client request，仍可能看到原始输入。
+Gateway boundary note：Privacy Filter 会接收原始 client-to-gateway body，因为 gateway 必须先看到 prompt 才能脱敏。它的保护保证是：当插件启用、hook 成功执行且选中匹配策略和处理范围后，gateway-to-upstream provider request body 中的白名单字段和 persisted request logs 会被脱敏。日志脱敏由 `redactLogs` 和 `sensitiveTypes` 控制，不受 request `redactionScopes` 影响。如果你检查 hook 执行前的本地 client request，仍可能看到原始输入。当前 `log.beforePersist` 失败或返回非法 payload 时会保留原始日志继续入库，所以它不是由宿主强制丢弃日志的合规边界。
 
 Official privacy filter rules are loaded under a 1 MiB host byte budget。`official.privacy-filter` 通过 `api.privacy.redactRequestBody` 和 `api.privacy.redactText` 调用宿主脱敏服务；community redaction plugins should use Extension Host gateway hooks and ordinary host APIs.
 

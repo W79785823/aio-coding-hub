@@ -39,9 +39,9 @@ AIO Coding Hub 采用同样形态：
 
 推荐模型只有一个：
 
-1. Extension Host：使用 `main` 加载打包后的 JavaScript 输出，通过 `contributes.gatewayHooks`、`protocolBridges`、`commands`、provider UI sections 和 capability dependency table 接入宿主。
+1. Extension Host：使用 `main` 加载打包后的 JavaScript 输出，通过 `contributes.gatewayHooks`、`commands`、provider UI sections 和 capability dependency table 接入宿主。`protocolBridges` 当前只进入声明、元数据和安装预检，不进入协议转换执行链。
 
-Gateway hooks 必须使用 `contributes.gatewayHooks` 与 `api.gateway.registerHook`。Protocol bridge 必须使用 `protocolBridges` 与 `protocol.bridge` capability。Provider extension values 和 provider UI sections/fields 必须使用 `provider.extensionValues` capability。
+Gateway hooks 必须使用 `contributes.gatewayHooks` 与 `api.gateway.registerHook`。Protocol bridge 元数据必须使用 `protocolBridges` 与 `protocol.bridge` 能力，但当前执行入口返回 `PLUGIN_EXTENSION_PROTOCOL_BRIDGE_NOT_IMPLEMENTED`。Provider extension values 和 provider UI sections/fields 必须使用 `provider.extensionValues` 能力；当前前端已挂载的 UI 插槽只有 `providers.editor.sections`、`settings.sections` 和 `logs.detail.tabs`。
 
 不要开放第三方 native 插件，除非先补齐独立 signed binary policy、ABI stability story、crash isolation model、upgrade story 和 platform-specific security review。
 
@@ -53,7 +53,7 @@ Gateway hooks 必须使用 `contributes.gatewayHooks` 与 `api.gateway.registerH
 - 在暴露给插件前，对 request 和 response bodies 做大小边界控制。
 - Stream hooks 保持 chunk-based，并提供 sliding-window context，而不是缓冲完整 stream。
 - 按 plugin ID、version 和 runtime key 缓存 Extension Host worker state。
-- 对非安全增强使用 fail open；只对用户明确启用的 security/privacy gates 使用 fail closed。
+- 对非安全增强使用 fail open；只对用户明确启用的安全/隐私关卡使用 fail closed。当前 `log.beforePersist` 失败或返回非法 payload 时会保留原始日志，没有宿主兜底脱敏。
 - 记录 runtime failures 和 circuit-open skips，避免坏插件持续拖慢 gateway。
 - official bundled plugins 要少而聚焦，控制 host startup、binary size 和维护风险。
 
@@ -76,7 +76,8 @@ Bundled official plugin：
 - Extension Host prompt helpers。
 - Extension Host response safety checks。
 - Extension Host log redactors。
-- Extension Host commands、gatewayHooks 和 protocolBridges。
+- Extension Host commands 和 gatewayHooks。
+- Protocol bridge 仅声明元数据；完整执行属于未来宿主集成。
 - Provider adapter facades remain internal；公开 provider 插件 API 尚未开放。
 
 ## 后续审计点

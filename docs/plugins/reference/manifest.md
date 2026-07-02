@@ -56,11 +56,11 @@ Capability dependency table：
 | `gatewayHooks` | `gateway.hooks` |
 | `protocolBridges` | `protocol.bridge` |
 
-Protocol bridge MVP skeleton 只稳定 `protocolBridges` manifest 声明、`protocol.bridge` capability dependency 和安装预检展示。完整协议互换执行链仍属于 future host integration；插件不能只靠声明 bridge 就接管 OpenAI、Gemini 或 Claude 协议转换。
+Protocol bridge MVP skeleton 只稳定 `protocolBridges` 的 `manifest` 声明、`protocol.bridge` 能力依赖、贡献注册表元数据和安装预检展示。当前执行入口会返回 `PLUGIN_EXTENSION_PROTOCOL_BRIDGE_NOT_IMPLEMENTED`；完整协议互换执行链仍属于未来宿主集成。插件不能只靠声明 bridge 就接管 OpenAI、Gemini 或 Claude 协议转换。
 
-`providers.card.badges` 和 `providers.card.actions` 是已命名 UI slots，但当前 SDK/Rust validation 不为它们强制 `provider.extensionValues` dependency。
+契约、SDK 和 Rust 校验认识的 UI 插槽名称多于当前前端已挂载位置。当前前端实际挂载 `providers.editor.sections`、`settings.sections` 和 `logs.detail.tabs`。`providers.editor.fields` 会被 SDK/Rust 校验为 provider UI contribution 并要求 `provider.extensionValues`，但当前前端没有对应类型化插槽挂载；`providers.card.badges`、`providers.card.actions` 和其他契约插槽目前只是 `manifest` 已知或仅用于元数据。
 
-`hostCompatibility` 必须包含 `app` 和 `pluginApi`；`platforms` 可以限制支持的操作系统。
+`hostCompatibility` 必须包含 `app` 和 `pluginApi`。`platforms` 当前是解析和展示元数据，不参与本地安装阻断或市场兼容性筛选；不要把它写成当前已强制执行的平台白名单。
 
 `configSchema` 可以包含标准 JSON Schema 展示字段和 AIO `x-aio-ui` 元数据。详见 [Config Schema](./config-schema.md)。
 

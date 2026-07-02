@@ -84,7 +84,7 @@ market index URL 只用于定位索引来源。trusted public key 用于校验 r
 
 远程或市场安装必须提供 checksum。宿主会下载 `.aio-plugin` 后重新计算 `sha256`，和索引中的 checksum 对比。提供 signature 和 trusted public key 时，宿主会校验 Ed25519 signature；没有 trusted public key 时，插件仍可能被当作 unsigned package 展示给用户。
 
-revoked / incompatible install blocks 必须在市场 UI 和宿主安装路径同时生效。UI 可以提前禁用安装按钮并解释原因；宿主命令仍要在真实安装时重新检查 revoked、host/app/pluginApi/platform compatibility、runtime policy 和包安全限制。
+revoked / incompatible install blocks 必须在市场 UI 和宿主安装路径同时生效。UI 可以提前禁用安装按钮并解释原因；宿主命令仍要在真实安装时重新检查 revoked、宿主应用版本、`pluginApi` 兼容性、运行时策略和包安全限制。`hostCompatibility.platforms` 当前只作为元数据展示，不参与这些安装阻断。
 
 ## Replay Fixtures In Publishing
 

@@ -13,7 +13,7 @@
 
 - [SDK](./sdk.md)：`@aio-coding-hub/plugin-sdk` 的 Extension Host manifest、hook result 和 validation helper 边界。
 - [Publishing](./publishing.md)：`.aio-plugin`、`sha256`、Ed25519 签名、`publish-check`、市场索引、远程安装和 rollback。
-- [Compatibility](./compatibility.md)：SemVer、`pluginApi`、platforms 和 legacy runtime 兼容规则。
+- [Compatibility](./compatibility.md)：SemVer、`pluginApi`、`platforms` 元数据和 legacy runtime 兼容规则。
 
 ## 调试与观测
 

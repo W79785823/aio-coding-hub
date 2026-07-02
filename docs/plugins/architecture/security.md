@@ -11,6 +11,7 @@
 - Legacy WASM、process 和第三方 native 都是 unsupported pre-release legacy runtime。
 - Hook 失败必须记录审计事件。
 - 高风险 hook 可以使用 fail-closed 策略。
+- 当前 `log.beforePersist` 默认 fail-open；hook 失败、超时或返回非法 payload 时保留原始日志继续入库。它不是强制合规日志脱敏边界，除非后续补宿主兜底脱敏、丢弃日志或专用策略。
 - 重复 runtime failure 可以让插件进入 `quarantined` 状态。
 
 未签名离线包会受到限制。High 和 critical host-mediated labels 只用于风险展示、审计和未来 API 设计；社区 Extension Host manifest 不能通过 top-level `permissions` 申请它们。

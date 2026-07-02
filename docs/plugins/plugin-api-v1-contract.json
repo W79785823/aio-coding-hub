@@ -50,6 +50,22 @@
     "usage.panels",
     "plugins.detail.panels"
   ],
+  "activeUiContributionSlots": [
+    "providers.editor.sections",
+    "settings.sections",
+    "logs.detail.tabs"
+  ],
+  "manifestOnlyUiContributionSlots": [
+    "app.sidebar.items",
+    "home.overview.cards",
+    "providers.editor.fields",
+    "providers.card.badges",
+    "providers.card.actions",
+    "logs.detail.actions",
+    "usage.panels",
+    "plugins.detail.panels"
+  ],
+  "uiContributionSlotBoundary": "uiContributionSlots 是 SDK/Rust 已知的 manifest 插槽名；activeUiContributionSlots 是当前前端已挂载的插槽",
   "contributionPoints": [
     "providers",
     "protocols",
@@ -79,7 +95,19 @@
     "requiredFields": ["bridgeType", "inboundProtocol", "outboundProtocol"],
     "optionalFields": ["supportsStreaming"],
     "status": "mvp-skeleton",
-    "executionBoundary": "manifest declaration, capability dependency, and install preview only; full protocol bridge execution is future host integration"
+    "executionBoundary": "仅支持 manifest 声明、能力依赖、贡献注册表元数据和安装预检展示；runtime execute 会返回 PLUGIN_EXTENSION_PROTOCOL_BRIDGE_NOT_IMPLEMENTED，直到完整 protocol bridge 执行链作为 future host integration 接入"
+  },
+  "hostCompatibilityRuntimeBoundary": {
+    "app": "当前参与安装和市场兼容性检查",
+    "pluginApi": "当前参与安装和市场兼容性检查",
+    "platforms": "当前代码中只作为元数据和展示字段；不参与市场兼容版本选择或本地安装阻断"
+  },
+  "storagePluginBoundary": {
+    "capability": "storage.plugin",
+    "status": "当前已接入的 Extension Host API",
+    "persistence": "存放在插件配置 JSON 的顶层 storage 字段，并通过插件配置持久化路径保存",
+    "limitBytes": 65536,
+    "reservedLabel": "plugin.storage 是内部或未来宿主中介标签，不是当前 active manifest capability"
   },
   "commandContribution": {
     "requiredFields": ["command", "title"],

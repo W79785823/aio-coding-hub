@@ -142,9 +142,13 @@ module.exports.activate = function(api) {
 | `gatewayHooks` | `gateway.hooks` |
 | `protocolBridges` | `protocol.bridge` |
 
-`providers.card.badges` 和 `providers.card.actions` 当前不是 capability dependency trigger。
+`protocolBridges` 的 SDK 类型和能力依赖已存在，但当前宿主执行入口尚未接入，调用会停在 `PLUGIN_EXTENSION_PROTOCOL_BRIDGE_NOT_IMPLEMENTED` 边界；它只适合声明元数据和通过安装预检解释影响。
+
+SDK 认识全部 `UiContributionSlot` 名称，Rust 也会校验已知插槽和宿主渲染 schema；这不等于前端都已挂载。当前前端类型化插槽只有 `providers.editor.sections`、`settings.sections` 和 `logs.detail.tabs`。`providers.editor.fields` 会触发 `provider.extensionValues` 依赖校验，但还没有前端渲染挂载；`providers.card.badges` 和 `providers.card.actions` 当前不是能力依赖触发项。
 
 `privacy.redact` 是宿主提供的脱敏 API capability。声明后，Extension Host 入口可以通过 `api.privacy.redactText` 和 `api.privacy.redactRequestBody` 调用宿主脱敏服务；它不自动声明 gateway hook，仍需要和 `gateway.hooks`、`contributes.gatewayHooks` 配合使用。
+
+`storage.plugin` 是当前 Extension Host storage API 能力。它通过 `api.storage` 暴露给插件，但持久化实现仍写入插件配置 JSON 的顶层 `storage` 字段，并有 64 KiB storage JSON 限制。`plugin.storage` 是内部/未来宿主中介标签，不是 active manifest capability。
 
 ## SDK 边界
 

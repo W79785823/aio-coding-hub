@@ -1,6 +1,6 @@
 # 插件兼容性
 
-插件兼容性使用 SemVer 描述。宿主安装、启用和升级插件时，会同时检查插件版本、插件 API 版本、应用版本、平台、Extension Host runtime 和 capability dependency。
+插件兼容性使用 SemVer 描述。宿主安装、启用和升级插件时，会检查插件版本、插件 API 版本、应用版本、Extension Host runtime 和能力依赖。`platforms` 当前会被解析和展示，但不会参与本地安装阻断或市场兼容性筛选。
 
 Manifest 中的关键字段：
 
@@ -8,7 +8,7 @@ Manifest 中的关键字段：
 - `apiVersion`：该 manifest 使用的插件 API 版本。
 - `hostCompatibility.app`：兼容的 AIO Coding Hub 应用版本范围。
 - `hostCompatibility.pluginApi`：兼容的 pluginApi 版本范围。
-- `hostCompatibility.platforms`：可选的平台 allowlist。
+- `hostCompatibility.platforms`：可选平台元数据。当前代码不把它作为强制白名单。
 - `runtime.kind = "extensionHost"`：Plugin API v1 唯一 community runtime。
 - `main`：打包后的 JavaScript 输出入口。
 
@@ -40,7 +40,7 @@ Scaffold and pack flow create Extension Host packages with `main`, `runtime.kind
 
 - `hostCompatibility.app` 必须匹配当前 AIO Coding Hub 版本。
 - `hostCompatibility.pluginApi` 必须匹配当前 Plugin API v1。
-- `hostCompatibility.platforms` 如果存在，必须包含当前桌面平台。
+- `hostCompatibility.platforms` 如果存在，会出现在预检和元数据中；当前不会因为缺少当前桌面平台而阻断本地安装或市场兼容版本选择。
 - runtime 必须是 Extension Host。
 - contribution 必须有对应 capability。
 
