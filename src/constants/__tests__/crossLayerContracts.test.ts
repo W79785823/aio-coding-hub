@@ -217,11 +217,31 @@ describe("cross-layer contracts", () => {
     expect(limits.MAX_PREFERRED_PORT, "u16::MAX").toBe(65535);
     expect(limits.MIN_LOG_RETENTION_DAYS, "persistence.rs: log_retention_days == 0").toBe(1);
     expect(settingsPersistenceSource).toContain("log_retention_days == 0");
-    expect(limits.MIN_PROVIDER_BASE_URL_PING_CACHE_TTL_SECONDS).toBe(1);
-    expect(limits.MIN_FAILOVER_MAX_ATTEMPTS_PER_PROVIDER).toBe(1);
-    expect(limits.MIN_FAILOVER_MAX_PROVIDERS_TO_TRY).toBe(1);
-    expect(limits.MIN_CIRCUIT_BREAKER_FAILURE_THRESHOLD).toBe(1);
-    expect(limits.MIN_CIRCUIT_BREAKER_OPEN_DURATION_MINUTES).toBe(1);
+    // MIN_*=1 limits anchor the validate_bounds error message text so that
+    // relaxing/removing the Rust check turns this test red.
+    const minOnePairs = [
+      [
+        limits.MIN_PROVIDER_BASE_URL_PING_CACHE_TTL_SECONDS,
+        "provider_base_url_ping_cache_ttl_seconds must be >= 1",
+      ],
+      [
+        limits.MIN_FAILOVER_MAX_ATTEMPTS_PER_PROVIDER,
+        "failover_max_attempts_per_provider must be >= 1",
+      ],
+      [limits.MIN_FAILOVER_MAX_PROVIDERS_TO_TRY, "failover_max_providers_to_try must be >= 1"],
+      [
+        limits.MIN_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+        "circuit_breaker_failure_threshold must be >= 1",
+      ],
+      [
+        limits.MIN_CIRCUIT_BREAKER_OPEN_DURATION_MINUTES,
+        "circuit_breaker_open_duration_minutes must be >= 1",
+      ],
+    ] as const;
+    for (const [frontendValue, rustAnchor] of minOnePairs) {
+      expect(frontendValue, `persistence.rs: ${rustAnchor}`).toBe(1);
+      expect(settingsPersistenceSource, rustAnchor).toContain(rustAnchor);
+    }
   });
 
   it("keeps the default gateway port aligned with Rust", () => {
