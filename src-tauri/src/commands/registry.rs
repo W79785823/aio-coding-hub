@@ -201,6 +201,7 @@ macro_rules! generated_command_registry {
             cli_sessions_folder_lookup_by_ids => crate::commands::cli_sessions::cli_sessions_folder_lookup_by_ids,
             // ── data_management ──
             db_disk_usage_get => crate::commands::data_management::db_disk_usage_get,
+            db_compact => crate::commands::data_management::db_compact,
             request_logs_clear_all => crate::commands::data_management::request_logs_clear_all,
             app_data_reset => crate::commands::data_management::app_data_reset,
             // ── usage ──

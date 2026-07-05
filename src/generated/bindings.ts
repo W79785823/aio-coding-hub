@@ -1752,6 +1752,14 @@ export const commands = {
       else return { status: "error", error: e as any };
     }
   },
+  async dbCompact(): Promise<Result<DbCompactResult, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("db_compact") };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
   async requestLogsClearAll(): Promise<Result<ClearRequestLogsResult, string>> {
     try {
       return { status: "ok", data: await TAURI_INVOKE("request_logs_clear_all") };
@@ -2574,6 +2582,7 @@ export type CostTrendRowV1 = {
   cost_covered_success: number;
 };
 export type DailyResetMode = "fixed" | "rolling";
+export type DbCompactResult = { before_bytes: number; after_bytes: number };
 export type DbDiskUsage = {
   db_bytes: number;
   wal_bytes: number;

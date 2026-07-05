@@ -59,7 +59,12 @@ export function SettingsPage() {
             sendSystemNotificationTest={notice.sendSystemNotificationTest}
           />
 
-          <SettingsSidebar updateMeta={updateMeta} />
+          <SettingsSidebar
+            updateMeta={updateMeta}
+            requestLogRetentionDays={
+              persistence.settingsReady ? persistence.requestLogRetentionDays : null
+            }
+          />
         </div>
       </div>
     </div>
