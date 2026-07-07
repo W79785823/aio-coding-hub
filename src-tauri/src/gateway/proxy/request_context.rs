@@ -62,7 +62,13 @@ pub(super) struct RequestContext<R: tauri::Runtime = tauri::Wry> {
 }
 
 impl<R: tauri::Runtime> RequestContext<R> {
-    pub(super) fn from_handler_parts(parts: RequestContextParts<R>) -> Self {
+    // abort_guard 由调用方在任何 await 之前构造并武装（见 handler/mod.rs
+    // post-chain 注释）：登记到活跃注册表的请求必须已有武装的 guard 兜底，
+    // 否则 handler future 在中间的 await 点被取消时注册表条目会永久泄漏。
+    pub(super) fn from_handler_parts(
+        parts: RequestContextParts<R>,
+        abort_guard: RequestAbortGuard<R>,
+    ) -> Self {
         let RequestContextParts {
             state,
             cli_key,
@@ -123,25 +129,6 @@ impl<R: tauri::Runtime> RequestContext<R> {
             upstream_first_byte_timeout_secs,
             upstream_stream_idle_timeout_secs,
             upstream_request_timeout_non_streaming_secs,
-        );
-
-        let abort_guard = RequestAbortGuard::new(
-            state.app.clone(),
-            state.db.clone(),
-            state.log_tx.clone(),
-            state.plugin_pipeline.clone(),
-            state.active_requests.clone(),
-            trace_id.clone(),
-            cli_key.clone(),
-            method_hint.clone(),
-            forwarded_path.clone(),
-            observe_request,
-            query.clone(),
-            session_id.clone(),
-            requested_model.clone(),
-            created_at_ms,
-            created_at,
-            started,
         );
 
         let base_headers = build_base_headers(headers);
