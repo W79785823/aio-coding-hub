@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { ProjectedRealtimeCard } from "../../../services/gateway/requestActivityProjection";
 import { RealtimeTraceCards } from "../RealtimeTraceCards";
 
 function traceBase(overrides: Partial<any> = {}) {
@@ -17,8 +18,26 @@ function traceBase(overrides: Partial<any> = {}) {
   };
 }
 
-function cards(traces: any[]) {
-  return traces.map((trace) => ({ trace }));
+function cards(traces: any[]): ProjectedRealtimeCard[] {
+  return traces.map((trace) =>
+    trace.summary
+      ? { kind: "settling", trace, activeRequest: null }
+      : {
+          kind: "active",
+          trace,
+          activeRequest: {
+            trace_id: trace.trace_id,
+            cli_key: trace.cli_key,
+            session_id: trace.session_id ?? null,
+            method: trace.method,
+            path: trace.path,
+            query: trace.query ?? null,
+            requested_model: trace.requested_model ?? null,
+            created_at_ms: trace.first_seen_ms,
+            last_activity_ms: trace.last_seen_ms,
+          },
+        }
+  );
 }
 
 describe("components/home/RealtimeTraceCards", () => {

@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type { RequestLogSummary } from "../requestLogs";
 import type { TraceSession, TraceSummary } from "../traceStore";
-import { buildRequestActivityProjection } from "../requestActivityProjection";
+import {
+  buildRequestActivityProjection,
+  shouldTickRequestActivityClock,
+  type ProjectedRealtimeCard,
+} from "../requestActivityProjection";
 
 function activeRequest(overrides: Record<string, unknown> = {}) {
   return {
@@ -129,14 +133,12 @@ describe("services/gateway/requestActivityProjection", () => {
       traces: [],
       nowMs: 1_700_000_000_000,
       realtimeCardLimit: 5,
-      realtimeCandidateLimit: 20,
     });
 
     expect(projection.realtimeCards).toHaveLength(0);
     expect(projection.requestRows.map((row) => row.log.trace_id)).toEqual(["old-pending"]);
     expect(projection.requestRows[0]?.liveTrace).toBeNull();
     expect(projection.requestRows[0]?.activityState).toBe("interrupted");
-    expect(projection.hasPending).toBe(false);
   });
 
   it("renders registry-active logs without live traces as synthesized realtime cards", () => {
@@ -153,14 +155,13 @@ describe("services/gateway/requestActivityProjection", () => {
       traces: [],
       nowMs,
       realtimeCardLimit: 5,
-      realtimeCandidateLimit: 20,
     });
 
     expect(projection.realtimeCards.map((card) => card.trace.trace_id)).toEqual(["active"]);
     expect(projection.realtimeCards[0]?.trace.summary).toBeUndefined();
+    expect(projection.realtimeCards[0]?.kind).toBe("active");
     expect(projection.realtimeCards[0]?.trace.first_seen_ms).toBe(nowMs - 120_000);
     expect(projection.requestRows).toHaveLength(0);
-    expect(projection.hasPending).toBe(true);
   });
 
   it("keeps terminal logs out of the in-progress projection despite a stale registry entry", () => {
@@ -171,13 +172,11 @@ describe("services/gateway/requestActivityProjection", () => {
       traces: [],
       nowMs,
       realtimeCardLimit: 5,
-      realtimeCandidateLimit: 20,
     });
 
     expect(projection.realtimeCards).toHaveLength(0);
     expect(projection.requestRows.map((row) => row.log.trace_id)).toEqual(["finished"]);
     expect(projection.requestRows[0]?.activityState).toBe("completed");
-    expect(projection.hasPending).toBe(false);
   });
 
   it("renders a pending log with a visible trace as one realtime card and no duplicate row", () => {
@@ -187,13 +186,11 @@ describe("services/gateway/requestActivityProjection", () => {
       traces: [trace({ trace_id: "live-pending" })],
       nowMs: 1_700_000_000_000 + 10 * 60 * 1000,
       realtimeCardLimit: 5,
-      realtimeCandidateLimit: 20,
     });
 
     expect(projection.realtimeCards.map((card) => card.trace.trace_id)).toEqual(["live-pending"]);
     expect(projection.requestRows).toHaveLength(0);
-    expect(projection.visibleRealtimeTraceIds.has("live-pending")).toBe(true);
-    expect(projection.hasLiveRealtimeCards).toBe(true);
+    expect(projection.realtimeCards[0]?.kind).toBe("active");
   });
 
   it("hides terminal rows only while their completed realtime card is in the exit window", () => {
@@ -210,7 +207,6 @@ describe("services/gateway/requestActivityProjection", () => {
       traces: [completedTrace],
       nowMs: 1_700_000_000_500,
       realtimeCardLimit: 5,
-      realtimeCandidateLimit: 20,
     });
     expect(duringExit.realtimeCards.map((card) => card.trace.trace_id)).toEqual(["completed"]);
     expect(duringExit.requestRows).toHaveLength(0);
@@ -221,7 +217,6 @@ describe("services/gateway/requestActivityProjection", () => {
       traces: [completedTrace],
       nowMs: 1_700_000_002_000,
       realtimeCardLimit: 5,
-      realtimeCandidateLimit: 20,
     });
     expect(afterExit.realtimeCards).toHaveLength(0);
     expect(afterExit.requestRows.map((row) => row.log.trace_id)).toEqual(["completed"]);
@@ -266,7 +261,6 @@ describe("services/gateway/requestActivityProjection", () => {
       ],
       nowMs: 1_700_000_000_500,
       realtimeCardLimit: 5,
-      realtimeCandidateLimit: 20,
     });
 
     const merged = projection.realtimeCards[0]?.trace.summary;
@@ -298,7 +292,6 @@ describe("services/gateway/requestActivityProjection", () => {
       ],
       nowMs: 1_700_000_000_000,
       realtimeCardLimit: 5,
-      realtimeCandidateLimit: 20,
     });
 
     expect(projection.realtimeCards[0]?.trace.claude_model_mapping).toMatchObject({
@@ -333,7 +326,6 @@ describe("services/gateway/requestActivityProjection", () => {
       ],
       nowMs: 1_700_000_000_000,
       realtimeCardLimit: 5,
-      realtimeCandidateLimit: 20,
     });
 
     expect(projection.realtimeCards[0]?.trace.claude_model_mapping).toMatchObject({
@@ -355,13 +347,12 @@ describe("services/gateway/requestActivityProjection", () => {
       traces: [],
       nowMs: 1_700_000_900_000,
       realtimeCardLimit: 5,
-      realtimeCandidateLimit: 20,
     });
 
-    expect(projection.hasPending).toBe(true);
     expect(projection.realtimeCards.map((card) => card.trace.trace_id)).toEqual([
       "active-without-log",
     ]);
+    expect(projection.realtimeCards[0]?.kind).toBe("active");
     expect(projection.requestRows).toHaveLength(0);
   });
 
@@ -396,7 +387,6 @@ describe("services/gateway/requestActivityProjection", () => {
       traces: [],
       nowMs,
       realtimeCardLimit: 5,
-      realtimeCandidateLimit: 20,
     });
 
     expect(projection.realtimeCards.map((card) => card.trace.trace_id)).toEqual([
@@ -437,12 +427,175 @@ describe("services/gateway/requestActivityProjection", () => {
       ],
       nowMs,
       realtimeCardLimit: 3,
-      realtimeCandidateLimit: 20,
     });
 
     const cardIds = projection.realtimeCards.map((card) => card.trace.trace_id);
     expect(cardIds).toContain("live-old");
     expect(cardIds).toContain("live-older");
     expect(cardIds).toHaveLength(3);
+  });
+
+  it("ignores an inactive summaryless trace instead of keeping it in progress forever", () => {
+    const projection = buildRequestActivityProjection({
+      requestLogs: [],
+      activeRequests: [],
+      traces: [trace({ trace_id: "stale-orphan" })],
+      nowMs: 1_700_000_900_000,
+      realtimeCardLimit: 5,
+    });
+
+    expect(projection.realtimeCards).toHaveLength(0);
+    expect(projection.requestRows).toHaveLength(0);
+  });
+
+  it("keeps active requests as realtime cards when newer stale traces exceed the candidate limit", () => {
+    const nowMs = 1_700_000_900_000;
+    const staleTraces = Array.from({ length: 25 }, (_, index) =>
+      trace({
+        trace_id: `stale-${index}`,
+        first_seen_ms: nowMs - index,
+        last_seen_ms: nowMs - index,
+      })
+    );
+    const projection = buildRequestActivityProjection({
+      requestLogs: [],
+      activeRequests: [
+        activeRequest({
+          trace_id: "real-active",
+          created_at_ms: nowMs - 60_000,
+          last_activity_ms: nowMs - 1_000,
+        }),
+      ],
+      traces: staleTraces,
+      nowMs,
+      realtimeCardLimit: 5,
+    });
+
+    expect(projection.realtimeCards.map((card) => card.trace.trace_id)).toContain("real-active");
+    expect(projection.requestRows.map((row) => row.log.trace_id)).not.toContain("real-active");
+  });
+
+  it("keeps every active card when active requests exceed the realtime soft limit", () => {
+    const nowMs = 1_700_000_900_000;
+    const projection = buildRequestActivityProjection({
+      requestLogs: [],
+      activeRequests: Array.from({ length: 4 }, (_, index) =>
+        activeRequest({
+          trace_id: `active-${index}`,
+          created_at_ms: nowMs - index * 1_000,
+        })
+      ),
+      traces: [],
+      nowMs,
+      realtimeCardLimit: 2,
+    });
+
+    expect(projection.realtimeCards).toHaveLength(4);
+    expect(projection.realtimeCards.every((card) => card.kind === "active")).toBe(true);
+    expect(projection.requestRows).toHaveLength(0);
+  });
+
+  it("normalizes realtime trace ids when removing duplicate history rows", () => {
+    const nowMs = 1_700_000_900_000;
+    const projection = buildRequestActivityProjection({
+      requestLogs: [log({ trace_id: "normalized-active" })],
+      activeRequests: [
+        activeRequest({
+          trace_id: " normalized-active ",
+          created_at_ms: nowMs - 1_000,
+        }),
+      ],
+      traces: [],
+      nowMs,
+      realtimeCardLimit: 5,
+    });
+
+    expect(projection.realtimeCards).toHaveLength(1);
+    expect(projection.requestRows).toHaveLength(0);
+  });
+
+  it("renders an interrupted row when an inactive placeholder has a stale trace", () => {
+    const projection = buildRequestActivityProjection({
+      requestLogs: [log({ trace_id: "interrupted-stale" })],
+      activeRequests: [],
+      traces: [trace({ trace_id: "interrupted-stale" })],
+      nowMs: 1_700_000_900_000,
+      realtimeCardLimit: 5,
+    });
+
+    expect(projection.realtimeCards).toHaveLength(0);
+    expect(projection.requestRows).toHaveLength(1);
+    expect(projection.requestRows[0]?.activityState).toBe("interrupted");
+  });
+
+  it("lets a terminal log finish a summaryless trace despite a stale active snapshot", () => {
+    const nowMs = 1_700_000_000_500;
+    const projection = buildRequestActivityProjection({
+      requestLogs: [log({ trace_id: "terminal-wins", status: 200, duration_ms: 500 })],
+      activeRequests: [activeRequest({ trace_id: "terminal-wins" })],
+      traces: [
+        trace({
+          trace_id: "terminal-wins",
+          first_seen_ms: 1_700_000_000_000,
+          last_seen_ms: 1_700_000_000_000,
+        }),
+      ],
+      nowMs,
+      realtimeCardLimit: 5,
+    });
+
+    expect(projection.realtimeCards[0]?.trace.summary?.status).toBe(200);
+    expect(projection.realtimeCards[0]?.kind).toBe("settling");
+  });
+
+  it("encodes active and settling summary invariants in the card type", () => {
+    type ActiveCard = Extract<ProjectedRealtimeCard, { kind: "active" }>;
+    type SettlingCard = Extract<ProjectedRealtimeCard, { kind: "settling" }>;
+
+    expectTypeOf<ActiveCard["trace"]["summary"]>().toEqualTypeOf<undefined>();
+    expectTypeOf<SettlingCard["trace"]["summary"]>().toEqualTypeOf<TraceSummary>();
+  });
+
+  it("ticks only for canonical active or settling cards", () => {
+    const nowMs = 1_700_000_000_500;
+    const staleActiveInput = {
+      requestLogs: [log({ trace_id: "terminal-wins", status: 200 })],
+      activeRequests: [activeRequest({ trace_id: "terminal-wins" })],
+      traces: [trace({ trace_id: "terminal-wins", last_seen_ms: nowMs })],
+      nowMs,
+    };
+    expect(shouldTickRequestActivityClock(staleActiveInput)).toBe(true);
+
+    expect(
+      shouldTickRequestActivityClock({
+        ...staleActiveInput,
+        traces: [],
+      })
+    ).toBe(false);
+
+    expect(
+      shouldTickRequestActivityClock({
+        ...staleActiveInput,
+        nowMs: nowMs + 2_000,
+      })
+    ).toBe(false);
+
+    expect(
+      shouldTickRequestActivityClock({
+        requestLogs: [],
+        activeRequests: [],
+        traces: [trace({ trace_id: "stale-orphan" })],
+        nowMs,
+      })
+    ).toBe(false);
+
+    expect(
+      shouldTickRequestActivityClock({
+        requestLogs: [],
+        activeRequests: [activeRequest({ trace_id: "active" })],
+        traces: [],
+        nowMs,
+      })
+    ).toBe(true);
   });
 });

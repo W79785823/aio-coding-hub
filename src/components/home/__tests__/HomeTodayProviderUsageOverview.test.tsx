@@ -75,6 +75,20 @@ function createRunningTrace(
   };
 }
 
+function createActiveRequestFromTrace(trace: TraceSession) {
+  return {
+    trace_id: trace.trace_id,
+    cli_key: trace.cli_key,
+    session_id: trace.session_id ?? null,
+    method: trace.method,
+    path: trace.path,
+    query: trace.query,
+    requested_model: trace.requested_model ?? null,
+    created_at_ms: trace.first_seen_ms,
+    last_activity_ms: trace.last_seen_ms,
+  };
+}
+
 function createLeaderboardRow(
   overrides: Pick<UsageLeaderboardRow, "key" | "name"> &
     Partial<Omit<UsageLeaderboardRow, "key" | "name">>
@@ -702,7 +716,7 @@ describe("components/home/HomeTodayProviderUsageOverview", () => {
     expect(screen.getAllByLabelText("进行中")).toHaveLength(3);
   });
 
-  it("keeps quiet no-summary traces while ignoring completed, unnamed, unknown, and duplicate traces", () => {
+  it("keeps registry-backed traces while ignoring completed, unnamed, unknown, and duplicates", () => {
     mockDataModel({ rows: [] });
     const now = Date.now();
     const completedTrace = {
@@ -746,20 +760,21 @@ describe("components/home/HomeTodayProviderUsageOverview", () => {
       providerId: 28,
       traceId: "duplicate",
     });
+    const activeTraces = [
+      oldTrace,
+      staleTrace,
+      unnamedTrace,
+      missingAttemptsTrace,
+      unknownTrace,
+      emptyScopedNameTrace,
+      liveTrace,
+      duplicateTrace,
+    ];
 
     render(
       <HomeTodayProviderUsageOverview
-        traces={[
-          completedTrace,
-          oldTrace,
-          staleTrace,
-          unnamedTrace,
-          missingAttemptsTrace,
-          unknownTrace,
-          emptyScopedNameTrace,
-          liveTrace,
-          duplicateTrace,
-        ]}
+        traces={[completedTrace, ...activeTraces]}
+        activeRequests={activeTraces.map(createActiveRequestFromTrace)}
       />
     );
 
@@ -916,9 +931,11 @@ describe("components/home/HomeTodayProviderUsageOverview", () => {
       ],
     });
 
+    const runningTrace = createRunningTrace("Shared Relay", { providerId: 0, cliKey: "codex" });
     render(
       <HomeTodayProviderUsageOverview
-        traces={[createRunningTrace("Shared Relay", { providerId: 0, cliKey: "codex" })]}
+        traces={[runningTrace]}
+        activeRequests={[createActiveRequestFromTrace(runningTrace)]}
       />
     );
 
@@ -989,11 +1006,34 @@ describe("components/home/HomeTodayProviderUsageOverview", () => {
       ],
     });
 
-    render(<HomeTodayProviderUsageOverview traces={[createRunningTrace("Claude Main")]} />);
+    const runningTrace = createRunningTrace("Claude Main");
+    render(
+      <HomeTodayProviderUsageOverview
+        traces={[runningTrace]}
+        activeRequests={[createActiveRequestFromTrace(runningTrace)]}
+      />
+    );
 
     const providerRow = screen.getByText("Claude Main").closest("tr");
     expect(providerRow).toBeTruthy();
     expect(within(providerRow as HTMLElement).getByLabelText("进行中")).toBeInTheDocument();
+  });
+
+  it("does not start a periodic clock for registry-backed provider hints", () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    mockDataModel({ rows: [] });
+    const runningTrace = createRunningTrace("Clockless Provider");
+
+    render(
+      <HomeTodayProviderUsageOverview
+        traces={[runningTrace]}
+        activeRequests={[createActiveRequestFromTrace(runningTrace)]}
+      />
+    );
+
+    expect(screen.getByText("claude/Clockless Provider")).toBeInTheDocument();
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    setIntervalSpy.mockRestore();
   });
 
   it("keeps running provider hints for long pending traces backed by the active registry", () => {

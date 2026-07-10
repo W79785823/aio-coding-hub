@@ -52,6 +52,7 @@ describe("pages/home/hooks/useHomeOverviewFeed", () => {
       requestLogsLoading: false,
       requestLogsRefreshing: false,
       requestLogsAvailable: true,
+      refreshActiveRequests: vi.fn().mockResolvedValue({ error: null }),
       refreshRequestLogs: vi.fn().mockResolvedValue({ error: null }),
     } as any);
     vi.mocked(useHomeFreshnessOwner).mockReturnValue({
@@ -203,13 +204,15 @@ describe("pages/home/hooks/useHomeOverviewFeed", () => {
     expect(requestLogsRefresh).not.toHaveBeenCalled();
   });
 
-  it("passes active request snapshots to the home freshness owner watchdog", () => {
+  it("passes active snapshots and their refresh action to the home freshness owner", async () => {
+    const refreshActiveRequests = vi.fn().mockResolvedValue({ error: null });
     vi.mocked(useRequestLogsFeed).mockReturnValue({
       requestLogs: [],
       activeRequests: [{ trace_id: "trace-active" }],
       requestLogsLoading: false,
       requestLogsRefreshing: false,
       requestLogsAvailable: true,
+      refreshActiveRequests,
       refreshRequestLogs: vi.fn().mockResolvedValue({ error: null }),
     } as any);
 
@@ -226,8 +229,16 @@ describe("pages/home/hooks/useHomeOverviewFeed", () => {
     expect(useHomeFreshnessOwner).toHaveBeenCalledWith(
       expect.objectContaining({
         requestActivityPending: true,
+        onRefreshActiveRequests: expect.any(Function),
       })
     );
+
+    const ownerCalls = vi.mocked(useHomeFreshnessOwner).mock.calls;
+    const ownerOptions = ownerCalls[ownerCalls.length - 1]?.[0];
+    await act(async () => {
+      await ownerOptions?.onRefreshActiveRequests();
+    });
+    expect(refreshActiveRequests).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the watchdog pending while a recent log row still lacks a terminal state", () => {

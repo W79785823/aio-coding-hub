@@ -1,7 +1,6 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { Loader2 } from "lucide-react";
 import { useDocumentVisibility } from "../../hooks/useDocumentVisibility";
-import { useNowMs } from "../../hooks/useNowMs";
 import { useWindowForeground } from "../../hooks/useWindowForeground";
 import type { GatewayActiveSession } from "../../services/gateway/gateway";
 import {
@@ -222,8 +221,9 @@ function buildRunningProvidersFromRealtimeCards(
   const seen = new Set<string>();
   const entries: ActiveProviderEntry[] = [];
 
-  for (const { trace } of cards) {
-    if (trace.summary) continue;
+  for (const card of cards) {
+    if (card.kind !== "active") continue;
+    const { trace } = card;
     let latestAttempt: NonNullable<typeof trace.attempts>[number] | undefined;
     for (const attempt of trace.attempts ?? []) {
       if (!latestAttempt || attempt.attempt_index > latestAttempt.attempt_index) {
@@ -648,7 +648,6 @@ export function HomeTodayProviderUsageOverview({
     throttleMs: 1000,
   });
 
-  const nowMs = useNowMs(Boolean(traces && traces.length > 0), 1000);
   const activeProviders = useMemo(() => {
     const activeSessionProviders = buildActiveProviders(activeSessions, {
       preferCliPrefix: !model.previewActive,
@@ -659,9 +658,8 @@ export function HomeTodayProviderUsageOverview({
         requestLogs,
         activeRequests,
         traces,
-        nowMs,
+        nowMs: Date.now(),
         realtimeCardLimit: REALTIME_PROVIDER_HINT_LIMIT,
-        realtimeCandidateLimit: REALTIME_PROVIDER_HINT_LIMIT,
       });
       const realtimeProviders = buildRunningProvidersFromRealtimeCards(projection.realtimeCards, {
         preferCliPrefix: !model.previewActive,
@@ -670,7 +668,7 @@ export function HomeTodayProviderUsageOverview({
     }
 
     return activeSessionProviders;
-  }, [activeRequests, activeSessions, model.previewActive, nowMs, requestLogs, traces]);
+  }, [activeRequests, activeSessions, model.previewActive, requestLogs, traces]);
 
   const topRows = useMemo(
     () => selectProviderRows(model.rows, activeProviders),

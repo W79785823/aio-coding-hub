@@ -30,6 +30,7 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
 
   it("coalesces duplicate complete signals into one request logs refresh", async () => {
     vi.useFakeTimers();
+    const refreshActiveRequests = vi.fn().mockResolvedValue(null);
     const refreshRequestLogs = vi.fn().mockResolvedValue(null);
     let eventHandler:
       | ((payload: {
@@ -54,6 +55,7 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
         overviewActive: true,
         foregroundActive: true,
         requestLogsRefreshWindowMs: 1000,
+        onRefreshActiveRequests: refreshActiveRequests,
         onRefreshRequestLogs: refreshRequestLogs,
       })
     );
@@ -74,6 +76,72 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
     });
 
     expect(refreshRequestLogs).toHaveBeenCalledTimes(1);
+    expect(refreshActiveRequests).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("queues a fresh active snapshot when complete arrives during a start refresh", async () => {
+    vi.useFakeTimers();
+    let resolveFirstRefresh: (() => void) | null = null;
+    const refreshActiveRequests = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirstRefresh = () => resolve(null);
+          })
+      )
+      .mockResolvedValueOnce(null);
+    const refreshRequestLogs = vi.fn().mockResolvedValue(null);
+    let eventHandler:
+      | ((payload: {
+          trace_id: string;
+          cli_key: string;
+          phase: "start" | "complete";
+          ts: number;
+        }) => void)
+      | null = null;
+
+    vi.mocked(subscribeGatewayEvent).mockImplementation((_event: string, handler: any) => {
+      eventHandler = handler;
+      return { ready: Promise.resolve(), unsubscribe: vi.fn() };
+    });
+
+    const view = renderHook(() =>
+      useHomeFreshnessOwner({
+        overviewActive: true,
+        foregroundActive: true,
+        requestLogsRefreshWindowMs: 1_000,
+        onRefreshActiveRequests: refreshActiveRequests,
+        onRefreshRequestLogs: refreshRequestLogs,
+      })
+    );
+
+    act(() => {
+      eventHandler?.({ trace_id: "t-1", cli_key: "claude", phase: "start", ts: 1 });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(refreshActiveRequests).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      eventHandler?.({ trace_id: "t-1", cli_key: "claude", phase: "complete", ts: 2 });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(refreshActiveRequests).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirstRefresh?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(refreshActiveRequests).toHaveBeenCalledTimes(2);
+    expect(refreshRequestLogs).not.toHaveBeenCalled();
+
+    view.unmount();
     vi.useRealTimers();
   });
 
@@ -91,6 +159,7 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
         overviewActive: true,
         foregroundActive: false,
         requestLogsRefreshWindowMs: 400,
+        onRefreshActiveRequests: vi.fn().mockResolvedValue(null),
         onRefreshRequestLogs: refreshRequestLogs,
       })
     );
@@ -122,6 +191,7 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
           ...props,
           requestLogsRefreshWindowMs: 200,
           requestActivityWatchdogIntervalMs: 5000,
+          onRefreshActiveRequests: vi.fn().mockResolvedValue(null),
           onRefreshRequestLogs: refreshRequestLogs,
         }),
       {
@@ -187,6 +257,7 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
         overviewActive: true,
         foregroundActive: false,
         requestLogsRefreshWindowMs: 400,
+        onRefreshActiveRequests: vi.fn().mockResolvedValue(null),
         onRefreshRequestLogs: refreshRequestLogs,
       })
     );
@@ -225,6 +296,7 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
         useHomeFreshnessOwner({
           ...props,
           requestLogsRefreshWindowMs: 400,
+          onRefreshActiveRequests: vi.fn().mockResolvedValue(null),
           onRefreshRequestLogs: refreshRequestLogs,
         }),
       {
@@ -264,6 +336,7 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
         requestActivityPending: true,
         requestLogsRefreshWindowMs: 200,
         requestActivityWatchdogIntervalMs: 5000,
+        onRefreshActiveRequests: vi.fn().mockResolvedValue(null),
         onRefreshRequestLogs: refreshRequestLogs,
       })
     );
@@ -293,6 +366,7 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
       useHomeFreshnessOwner({
         overviewActive: true,
         foregroundActive: true,
+        onRefreshActiveRequests: vi.fn().mockResolvedValue(null),
         onRefreshRequestLogs: refreshRequestLogs,
       })
     );
@@ -333,6 +407,7 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
         overviewActive: true,
         foregroundActive: true,
         requestLogsRefreshWindowMs: 400,
+        onRefreshActiveRequests: vi.fn().mockResolvedValue(null),
         onRefreshRequestLogs: refreshRequestLogs,
       })
     );
@@ -365,6 +440,7 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
       useHomeFreshnessOwner({
         overviewActive: false,
         foregroundActive: true,
+        onRefreshActiveRequests: vi.fn().mockResolvedValue(null),
         onRefreshRequestLogs: refreshRequestLogs,
       })
     );
@@ -383,6 +459,7 @@ describe("pages/home/hooks/useHomeFreshnessOwner", () => {
       useHomeFreshnessOwner({
         overviewActive: true,
         foregroundActive: true,
+        onRefreshActiveRequests: vi.fn().mockResolvedValue(null),
         onRefreshRequestLogs: refreshRequestLogs,
       })
     );

@@ -64,6 +64,9 @@ export function useHomeOverviewFeed({
   const refetchRequestLogsSilently = useCallback(async () => {
     return requestLogsFeed.refreshRequestLogs();
   }, [requestLogsFeed]);
+  const refetchActiveRequestsSilently = useCallback(async () => {
+    return requestLogsFeed.refreshActiveRequests();
+  }, [requestLogsFeed]);
 
   const refreshUsageHeatmap = useCallback(() => {
     void refetchUsageHeatmapSilently().then((res) => {
@@ -82,6 +85,7 @@ export function useHomeOverviewFeed({
     foregroundActive,
     requestActivityPending: activeRequests.length > 0 || hasRecentUnresolvedRequestLog,
     requestLogsRefreshWindowMs: 1000,
+    onRefreshActiveRequests: refetchActiveRequestsSilently,
     onRefreshRequestLogs: refetchRequestLogsSilently,
   });
 

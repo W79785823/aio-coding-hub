@@ -169,6 +169,7 @@ describe("hooks/useRequestLogsFeed", () => {
     vi.useFakeTimers();
     const requestRefetch = vi.fn();
     const incrementalRefresh = vi.fn().mockResolvedValue(null);
+    const activeRefetch = vi.fn().mockResolvedValue({ data: [] });
     let eventHandler:
       | ((payload: {
           trace_id: string;
@@ -187,6 +188,12 @@ describe("hooks/useRequestLogsFeed", () => {
     vi.mocked(useRequestLogsIncrementalRefreshMutation).mockReturnValue({
       mutateAsync: incrementalRefresh,
       isPending: true,
+    } as any);
+    vi.mocked(useActiveRequestLogsSnapshotQuery).mockReturnValue({
+      data: [],
+      isLoading: false,
+      isFetching: false,
+      refetch: activeRefetch,
     } as any);
     vi.mocked(subscribeGatewayEvent).mockImplementation((event: string, handler: any) => {
       expect(event).toBe(gatewayEventNames.requestSignal);
@@ -224,7 +231,79 @@ describe("hooks/useRequestLogsFeed", () => {
     });
 
     expect(incrementalRefresh).toHaveBeenCalledTimes(1);
+    expect(activeRefetch).toHaveBeenCalledTimes(2);
     expect(requestRefetch).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("queues a fresh active snapshot after complete arrives during a start refresh", async () => {
+    vi.useFakeTimers();
+    let resolveFirstRefresh: (() => void) | null = null;
+    const activeRefetch = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirstRefresh = () => resolve({ data: [{ trace_id: "stale" }] });
+          })
+      )
+      .mockResolvedValueOnce({ data: [] });
+    let eventHandler:
+      | ((payload: {
+          trace_id: string;
+          cli_key: string;
+          phase: "start" | "complete";
+          ts: number;
+        }) => void)
+      | null = null;
+
+    vi.mocked(useRequestLogsListAllQuery).mockReturnValue({
+      data: [],
+      isLoading: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+    vi.mocked(useActiveRequestLogsSnapshotQuery).mockReturnValue({
+      data: [],
+      isLoading: false,
+      isFetching: false,
+      refetch: activeRefetch,
+    } as any);
+    vi.mocked(subscribeGatewayEvent).mockImplementation((_event: string, handler: any) => {
+      eventHandler = handler;
+      return { ready: Promise.resolve(), unsubscribe: vi.fn() };
+    });
+
+    renderHook(() =>
+      useRequestLogsFeed({
+        limit: 10,
+        liveUpdatesEnabled: true,
+        liveUpdateIntervalMs: 2_000,
+      })
+    );
+
+    act(() => {
+      eventHandler?.({ trace_id: "t-1", cli_key: "claude", phase: "start", ts: 1 });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(activeRefetch).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      eventHandler?.({ trace_id: "t-1", cli_key: "claude", phase: "complete", ts: 2 });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(activeRefetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirstRefresh?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(activeRefetch).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
 

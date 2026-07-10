@@ -13,6 +13,10 @@ type RefreshSource =
   | "manual"
   | "request_activity.watchdog";
 
+type ActiveRequestRefreshSource = "request_signal.start" | "request_signal.complete";
+
+const ACTIVE_REQUEST_REFRESH_WINDOW_MS = 200;
+
 type UseHomeFreshnessOwnerOptions = {
   overviewActive: boolean;
   foregroundActive: boolean;
@@ -20,6 +24,7 @@ type UseHomeFreshnessOwnerOptions = {
   requestLogsRefreshWindowMs?: number;
   requestActivityWatchdogIntervalMs?: number | false;
   foregroundThrottleMs?: number;
+  onRefreshActiveRequests: () => Promise<unknown>;
   onRefreshRequestLogs: () => Promise<unknown>;
 };
 
@@ -41,6 +46,7 @@ export function useHomeFreshnessOwner({
   requestLogsRefreshWindowMs,
   requestActivityWatchdogIntervalMs,
   foregroundThrottleMs = 1000,
+  onRefreshActiveRequests,
   onRefreshRequestLogs,
 }: UseHomeFreshnessOwnerOptions) {
   // 事件驱动刷新（complete 信号 / 前台补拉 / 手动）只要求页面处于活跃路由：
@@ -51,6 +57,21 @@ export function useHomeFreshnessOwner({
   const watchdogIntervalMs = resolveRequestActivityWatchdogIntervalMs(
     requestActivityWatchdogIntervalMs
   );
+  const { schedule: scheduleActiveRequestsRefresh } = useCoalescedAsyncRefresh<
+    ActiveRequestRefreshSource,
+    unknown
+  >({
+    enabled: overviewActive,
+    delayMs: ACTIVE_REQUEST_REFRESH_WINDOW_MS,
+    task: () => onRefreshActiveRequests(),
+    onError: (error, source) => {
+      logToConsole("warn", "首页进行中请求快照刷新失败", {
+        source,
+        error: String(error),
+      });
+      return { error };
+    },
+  });
   const { flush: flushRequestLogs, schedule: scheduleRequestLogsRefresh } =
     useCoalescedAsyncRefresh<RefreshSource, unknown>({
       enabled: overviewActive,
@@ -103,6 +124,7 @@ export function useHomeFreshnessOwner({
         return;
       }
 
+      scheduleActiveRequestsRefresh(`request_signal.${requestSignal.phase}`);
       if (!isRequestSignalComplete(requestSignal)) {
         return;
       }
@@ -132,7 +154,7 @@ export function useHomeFreshnessOwner({
       cancelled = true;
       requestSignalSub.unsubscribe();
     };
-  }, [overviewActive, scheduleRequestLogsRefresh]);
+  }, [overviewActive, scheduleActiveRequestsRefresh, scheduleRequestLogsRefresh]);
 
   return {
     refreshRequestLogsNow,
