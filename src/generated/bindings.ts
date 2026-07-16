@@ -1925,6 +1925,163 @@ export const commands = {
       else return { status: "error", error: e as any };
     }
   },
+  async imageGenConfigGet(adapterId: string): Promise<Result<ImageGenConfigView, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("image_gen_config_get", { adapterId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async imageGenConfigSet(
+    adapterId: string,
+    baseUrl: string,
+    model: string,
+    apiKey: string | null
+  ): Promise<Result<ImageGenConfigView, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("image_gen_config_set", { adapterId, baseUrl, model, apiKey }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async imageGenPostJson(
+    adapterId: string,
+    path: string,
+    body: JsonValue,
+    timeoutSecs: number | null
+  ): Promise<Result<ImageGenHttpResponse, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("image_gen_post_json", { adapterId, path, body, timeoutSecs }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async imageGenPostMultipart(
+    adapterId: string,
+    path: string,
+    fields: [string, string][],
+    files: ImageGenMultipartFile[],
+    timeoutSecs: number | null
+  ): Promise<Result<ImageGenHttpResponse, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("image_gen_post_multipart", {
+          adapterId,
+          path,
+          fields,
+          files,
+          timeoutSecs,
+        }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async imageGenFetchImage(
+    url: string,
+    timeoutSecs: number | null
+  ): Promise<Result<ImageGenFetchedImage, string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("image_gen_fetch_image", { url, timeoutSecs }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async imageGenSaveImage(path: string, dataB64: string): Promise<Result<boolean, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("image_gen_save_image", { path, dataB64 }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async imageGenTaskPersist(
+    payload: ImageGenTaskPersistPayload
+  ): Promise<Result<ImageGenTaskRow, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("image_gen_task_persist", { payload }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async imageGenTasksList(
+    beforeCreatedAt: number | null,
+    limit: number
+  ): Promise<Result<ImageGenTaskRow[], string>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("image_gen_tasks_list", { beforeCreatedAt, limit }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async imageGenTaskDelete(id: string): Promise<Result<null, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("image_gen_task_delete", { id }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async imageGenTasksClear(): Promise<Result<number, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("image_gen_tasks_clear") };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async imageGenReadImage(path: string): Promise<Result<ImageGenFetchedImage, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("image_gen_read_image", { path }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async imageGenStorageGet(): Promise<Result<ImageGenStorageView, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("image_gen_storage_get") };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async imageGenStorageSetDir(dir: string): Promise<Result<ImageGenStorageView, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("image_gen_storage_set_dir", { dir }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
+  async imageGenStorageCleanup(keepCount: number): Promise<Result<number, string>> {
+    try {
+      return { status: "ok", data: await TAURI_INVOKE("image_gen_storage_cleanup", { keepCount }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as any };
+    }
+  },
   async envConflictsCheck(cliKey: string): Promise<Result<EnvConflict[], string>> {
     try {
       return { status: "ok", data: await TAURI_INVOKE("env_conflicts_check", { cliKey }) };
@@ -2837,6 +2994,68 @@ export type HostRenderedSchema =
   | { type: "panel"; fields: HostRenderedField[] }
   | { type: "badge"; label: string; tone?: HostRenderedBadgeTone | null };
 export type HostRenderedSelectOption = { value: string; label: string };
+/**
+ * IPC-facing view: intentionally has no api_key field, only a configured flag.
+ */
+export type ImageGenConfigView = {
+  adapterId: string;
+  baseUrl: string;
+  model: string;
+  apiKeyConfigured: boolean;
+};
+export type ImageGenFetchedImage = { mime: string; dataB64: string };
+export type ImageGenHttpResponse = { status: number; bodyText: string };
+export type ImageGenMultipartFile = {
+  field: string;
+  filename: string;
+  mime: string;
+  dataB64: string;
+};
+export type ImageGenStorageView = { dir: string; totalBytes: number; taskCount: number };
+export type ImageGenTaskFilePayload = { mime: string; dataB64: string };
+export type ImageGenTaskFileRow = {
+  /**
+   * Absolute path of the stored file.
+   */
+  path: string;
+  /**
+   * Absolute path of the thumbnail (generated images only).
+   */
+  thumbPath: string | null;
+  mime: string;
+};
+export type ImageGenTaskPersistPayload = {
+  id: string;
+  adapterId: string | null;
+  prompt: string;
+  requestJson: string;
+  status: string;
+  error: string | null;
+  usageJson: string | null;
+  createdAt: number;
+  elapsedMs: number | null;
+  images: ImageGenTaskFilePayload[];
+  /**
+   * Frontend-generated thumbnails, paired with `images` by index. Fewer
+   * thumbs than images is tolerated (missing thumb -> no thumb path).
+   */
+  thumbs: ImageGenTaskFilePayload[];
+  refImages: ImageGenTaskFilePayload[];
+};
+export type ImageGenTaskRow = {
+  id: string;
+  adapterId: string;
+  prompt: string;
+  requestJson: string;
+  status: string;
+  error: string | null;
+  usageJson: string | null;
+  images: ImageGenTaskFileRow[];
+  refImages: ImageGenTaskFileRow[];
+  dir: string;
+  createdAt: number;
+  elapsedMs: number | null;
+};
 export type InstalledSkillSummary = {
   id: number;
   skill_key: string;

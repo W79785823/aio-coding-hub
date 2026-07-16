@@ -219,6 +219,21 @@ macro_rules! generated_command_registry {
             usage_day_detail_v1 => crate::commands::usage::usage_day_detail_v1,
             usage_folder_options_v1 => crate::commands::usage::usage_folder_options_v1,
             usage_provider_cache_rate_trend_v1 => crate::commands::usage::usage_provider_cache_rate_trend_v1,
+            // ── image_gen ──
+            image_gen_config_get => crate::commands::image_gen::image_gen_config_get,
+            image_gen_config_set => crate::commands::image_gen::image_gen_config_set,
+            image_gen_post_json => crate::commands::image_gen::image_gen_post_json,
+            image_gen_post_multipart => crate::commands::image_gen::image_gen_post_multipart,
+            image_gen_fetch_image => crate::commands::image_gen::image_gen_fetch_image,
+            image_gen_save_image => crate::commands::image_gen::image_gen_save_image,
+            image_gen_task_persist => crate::commands::image_gen::image_gen_task_persist,
+            image_gen_tasks_list => crate::commands::image_gen::image_gen_tasks_list,
+            image_gen_task_delete => crate::commands::image_gen::image_gen_task_delete,
+            image_gen_tasks_clear => crate::commands::image_gen::image_gen_tasks_clear,
+            image_gen_read_image => crate::commands::image_gen::image_gen_read_image,
+            image_gen_storage_get => crate::commands::image_gen::image_gen_storage_get,
+            image_gen_storage_set_dir => crate::commands::image_gen::image_gen_storage_set_dir,
+            image_gen_storage_cleanup => crate::commands::image_gen::image_gen_storage_cleanup,
             // ── env_conflicts ──
             env_conflicts_check => crate::commands::env_conflicts::env_conflicts_check,
             // ── cli_proxy ──
