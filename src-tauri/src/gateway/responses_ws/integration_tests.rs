@@ -2128,6 +2128,60 @@ async fn client_cancel_after_content_logs_499_without_provider_health_damage() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn codex_preempted_generation_continues_the_same_turn_on_a_new_socket() {
+    let fixture = Fixture::new(true).await;
+    let (stub, upstream) = Stub::start("A", Behavior::HoldAfterContent).await;
+    fixture.provider("A", &upstream.origin(), true);
+    let (gateway, mut logs) = fixture.start().await;
+    let session = "codex-preempt";
+    let Message::Text(create) = create_message(Some(session)) else {
+        unreachable!()
+    };
+    let mut body: Value = serde_json::from_str(&create).unwrap();
+    body["input"][0]["type"] = json!("message");
+    let user = |text: &str| json!({"type":"message","role":"user","content":[{"type":"input_text","text":text}]});
+    let answer = events("A")[2]["item"].clone();
+
+    let mut socket = connect(&gateway, session).await.unwrap();
+    socket.send(Message::Text(body.to_string())).await.unwrap();
+    let nonce = recv_until(&mut socket, "response.metadata").await["headers"]
+        [protocol::TURN_STATE_HEADER]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    recv_until(&mut socket, "response.output_text.delta").await;
+    stub.release.notify_waiters();
+    recv_until(&mut socket, "response.completed").await;
+    assert_eq!(terminal_log(&mut logs).await.status, Some(200));
+    socket.close(None).await.unwrap();
+    drop(socket);
+
+    // Steering or sub-agent input makes Codex abandon the in-flight stream...
+    body["client_metadata"][protocol::TURN_STATE_HEADER] = json!(nonce);
+    body["input"] = json!([body["input"][0], answer, user("tool result")]);
+    let mut socket = connect(&gateway, session).await.unwrap();
+    socket.send(Message::Text(body.to_string())).await.unwrap();
+    recv_until(&mut socket, "response.output_text.delta").await;
+    socket.close(None).await.unwrap();
+    drop(socket);
+    assert_eq!(terminal_log(&mut logs).await.status, Some(499));
+
+    // ...and resend the same turn with its nonce on a fresh socket.
+    body["input"]
+        .as_array_mut()
+        .unwrap()
+        .push(user("steering input"));
+    let mut socket = connect(&gateway, session).await.unwrap();
+    socket.send(Message::Text(body.to_string())).await.unwrap();
+    recv_until(&mut socket, "response.output_text.delta").await;
+    stub.release.notify_waiters();
+    let completed = recv_until(&mut socket, "response.completed").await;
+    assert_eq!(completed["response"]["id"], "resp-A");
+    assert_eq!(terminal_log(&mut logs).await.status, Some(200));
+    assert_eq!(stub.transports(), ["ws", "ws", "ws"]);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn disabling_ws_finishes_accepted_generation_then_rejects_new_ws_and_keeps_http() {
     let fixture = Fixture::new(true).await;
     let (stub, upstream) = Stub::start("A", Behavior::HoldAfterContent).await;
