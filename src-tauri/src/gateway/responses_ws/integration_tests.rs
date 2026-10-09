@@ -731,6 +731,54 @@ async fn ws_without_recovery_metadata_keeps_same_connection_context() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn ws_incremental_continuation_logs_session_reuse() {
+    let fixture = Fixture::new(true).await;
+    let (_stub, upstream) = Stub::start("A", Behavior::KeepAlive).await;
+    let provider_id = fixture.provider("A", &upstream.origin(), true);
+    let (gateway, mut logs) = fixture.start().await;
+    let mut socket = connect_with_user_agent(&gateway, "ws-session-reuse", None)
+        .await
+        .unwrap();
+    let cache_key = "019a0000-0000-7000-8000-00000000c0de";
+    socket
+        .send(Message::Text(
+            json!({
+                "type":"response.create", "model":"gpt-test", "prompt_cache_key":cache_key,
+                "input":[{"role":"user","content":"hello"}]
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    recv_until(&mut socket, "response.completed").await;
+    let first = terminal_log(&mut logs).await;
+    let first_attempts: Vec<Value> = serde_json::from_str(&first.attempts_json).unwrap();
+    assert_eq!(first_attempts[0]["session_reuse"], Value::Null);
+
+    // Codex 续接只带增量 input（单条），会话绑定仍须生效。
+    socket
+        .send(Message::Text(
+            json!({
+                "type":"response.create", "model":"gpt-test", "prompt_cache_key":cache_key,
+                "previous_response_id":"resp-A",
+                "input":[{"type":"function_call_output","call_id":"call-1","output":"ok"}]
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    recv_until(&mut socket, "response.completed").await;
+    let second = terminal_log(&mut logs).await;
+    assert_eq!(second.session_id, first.session_id);
+    assert!(second.session_id.is_some());
+    let attempts: Vec<Value> = serde_json::from_str(&second.attempts_json).unwrap();
+    assert_eq!(attempts[0]["provider_id"], provider_id);
+    assert_eq!(attempts[0]["session_reuse"], true);
+    assert_eq!(attempts[0]["selection_method"], "session_reuse");
+    socket.close(None).await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn ws_without_recovery_metadata_cannot_replay_after_context_loss() {
     for new_connection in [false, true] {
         let fixture = Fixture::new(true).await;

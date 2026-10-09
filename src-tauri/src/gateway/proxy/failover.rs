@@ -53,6 +53,15 @@ pub(super) fn should_reuse_provider(body_json: Option<&serde_json::Value>) -> bo
         return false;
     };
 
+    // Responses 续接（Codex WS 每轮都是）只发增量 input，长度常为 1，靠 previous_response_id 标识延续。
+    if value
+        .get("previous_response_id")
+        .and_then(|v| v.as_str())
+        .is_some_and(|id| !id.trim().is_empty())
+    {
+        return true;
+    }
+
     let len = value
         .get("messages")
         .and_then(|v| v.as_array())

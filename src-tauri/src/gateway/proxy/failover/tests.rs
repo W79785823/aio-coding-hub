@@ -223,6 +223,26 @@ fn should_reuse_provider_checks_input_array() {
 }
 
 #[test]
+fn should_reuse_provider_treats_previous_response_id_as_continuation() {
+    let body = json!({
+        "previous_response_id": "resp-1",
+        "input": [{"type": "function_call_output", "call_id": "c1", "output": "ok"}]
+    });
+    assert!(should_reuse_provider(Some(&body)));
+}
+
+#[test]
+fn should_reuse_provider_ignores_blank_or_non_string_previous_response_id() {
+    for previous in [json!(""), json!("   "), json!(null), json!(42)] {
+        let body = json!({
+            "previous_response_id": previous,
+            "input": [{"type": "message", "content": "a"}]
+        });
+        assert!(!should_reuse_provider(Some(&body)), "{previous}");
+    }
+}
+
+#[test]
 fn should_reuse_provider_checks_contents_array() {
     let body = json!({
         "contents": [
