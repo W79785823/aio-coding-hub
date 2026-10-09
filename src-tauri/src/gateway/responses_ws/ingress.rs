@@ -723,11 +723,12 @@ mod tests {
             .unwrap()
             .nonce
             .clone();
-        body["input"].as_array_mut().unwrap().push(input);
         // A missing echoed nonce must not bypass completed-history validation.
-        let mut changed = body.clone();
-        changed["input"][0]["content"][0]["text"] = json!("replacement");
-        assert!(prepare_request(connection.clone(), &headers, &changed, None).is_err());
+        let replay = prepare_request(connection.clone(), &headers, &body, None)
+            .unwrap()
+            .unwrap();
+        assert!(runtime.begin_generation(&replay).is_err());
+        body["input"].as_array_mut().unwrap().push(input);
         let extended = prepare_request(connection.clone(), &headers, &body, None)
             .unwrap()
             .unwrap();
@@ -790,7 +791,7 @@ mod tests {
         ));
     }
     #[test]
-    fn unverified_history_allows_socket_continuation_but_not_a_full_rebuild() {
+    fn unverified_history_allows_socket_continuation_and_a_fresh_full_rebuild() {
         use serde_json::json;
         let runtime = Arc::new(state::Runtime::new(true));
         let connection = runtime.connection().unwrap();
@@ -812,10 +813,12 @@ mod tests {
         complete(&next, "resp_next");
         body.as_object_mut().unwrap().remove("previous_response_id");
         body["input"] = json!([input, input, input]);
-        assert!(matches!(
-            prepare_request(connection, &headers, &body, None),
-            Err("context recovery contains unsupported history")
-        ));
+        // Unverifiable history cannot claim a recovery grant, but still runs fresh.
+        let rebuilt = prepare_request(connection, &headers, &body, None)
+            .unwrap()
+            .unwrap();
+        assert!(!rebuilt.generation.lock_or_recover().recovered);
+        runtime.begin_generation(&rebuilt).unwrap();
     }
 
     #[test]

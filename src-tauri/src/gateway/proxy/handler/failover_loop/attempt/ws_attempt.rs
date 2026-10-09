@@ -115,42 +115,42 @@ pub(super) async fn recover<R: tauri::Runtime>(
         )
         .await;
     };
-    {
+    let incremental = {
         let mut generation = request.generation.lock_or_recover();
         generation
             .budget
             .failed_providers
             .extend(loop_state.failed_provider_ids.iter().copied());
-    }
-    match request.connection.runtime.suspend(request) {
-        Ok(()) => {
-            marker(
-                input,
-                prepared.provider_id,
-                "responses_ws",
-                "full_input_retry",
-                Some("context"),
-                Some("previous_response_not_found"),
-            );
-            finish_error(
-                ctx,
-                input,
-                loop_state,
-                "previous_response_not_found",
-                "Response context is unavailable; resend the full input",
-            )
-            .await
-        }
-        Err(_) => {
-            finish_error(
-                ctx,
-                input,
-                loop_state,
-                "invalid_request",
-                "Response context cannot be safely restored",
-            )
-            .await
-        }
+        generation.previous.is_some()
+    };
+    // Without a grant the client's full resend still runs as a fresh generation.
+    let suspended = request.connection.runtime.suspend(request).is_ok();
+    if suspended || incremental {
+        marker(
+            input,
+            prepared.provider_id,
+            "responses_ws",
+            "full_input_retry",
+            Some("context"),
+            Some("previous_response_not_found"),
+        );
+        finish_error(
+            ctx,
+            input,
+            loop_state,
+            "previous_response_not_found",
+            "Response context is unavailable; resend the full input",
+        )
+        .await
+    } else {
+        finish_error(
+            ctx,
+            input,
+            loop_state,
+            "invalid_request",
+            "Response context cannot be safely restored",
+        )
+        .await
     }
 }
 

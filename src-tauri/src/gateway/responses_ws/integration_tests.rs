@@ -29,6 +29,7 @@ struct Fixture {
     runtime: Arc<Runtime>,
     active: Arc<crate::gateway::active_requests::ActiveRequestRegistry>,
     circuit: Arc<circuit_breaker::CircuitBreaker>,
+    recent_errors: Arc<Mutex<RecentErrorCache>>,
     previous_env: Vec<(&'static str, Option<OsString>)>,
     _home: tempfile::TempDir,
     _lock: MutexGuard<'static, ()>,
@@ -82,6 +83,7 @@ impl Fixture {
                 Default::default(),
                 None,
             )),
+            recent_errors: Default::default(),
             previous_env,
             _home: home,
             _lock: lock,
@@ -211,7 +213,7 @@ impl Fixture {
             circuit: self.circuit.clone(),
             session: Arc::new(session_manager::SessionManager::new()),
             codex_session_cache: Arc::new(Mutex::new(CodexSessionIdCache::default())),
-            recent_errors: Arc::new(Mutex::new(RecentErrorCache::default())),
+            recent_errors: self.recent_errors.clone(),
             latency_cache: Arc::new(Mutex::new(ProviderBaseUrlPingCache::default())),
             plugin_pipeline,
             active_requests: self.active.clone(),
@@ -539,7 +541,7 @@ async fn terminal_log(
 
 #[tokio::test(flavor = "current_thread")]
 async fn ws_local_nonce_rejections_log_the_same_trace_without_calling_upstream() {
-    for case in ["forged", "expired", "completed-replay"] {
+    for case in ["forged", "completed-replay"] {
         let fixture = Fixture::new(true).await;
         let (stub, upstream) = Stub::start("A", Behavior::Complete).await;
         let provider = fixture.provider("A", &upstream.origin(), true);
@@ -576,15 +578,8 @@ async fn ws_local_nonce_rejections_log_the_same_trace_without_calling_upstream()
             )
         } else {
             let nonce = fixture.runtime.issue_nonce(&owner).unwrap();
-            let reason = if case == "expired" {
-                fixture.runtime.invalidate();
-                body["client_metadata"][protocol::TURN_STATE_HEADER] = json!(nonce);
-                "unknown or expired Responses owner nonce"
-            } else {
-                body["client_metadata"][protocol::TURN_STATE_HEADER] = json!("aio-ws-forged");
-                "context recovery ownership mismatch"
-            };
-            (nonce, reason)
+            body["client_metadata"][protocol::TURN_STATE_HEADER] = json!("aio-ws-forged");
+            (nonce, "context recovery ownership mismatch")
         };
         let mut socket = connect(&gateway, session).await.unwrap();
         socket.send(Message::Text(body.to_string())).await.unwrap();
@@ -1999,6 +1994,75 @@ async fn real_codex_cli_auto_compaction_preserves_the_turn_nonce_without_repeati
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn lost_context_with_unverifiable_history_still_asks_codex_for_a_full_resend() {
+    let fixture = Fixture::new(true).await;
+    let recovery = CliRecoveryStub::default();
+    let first = Server::start(
+        Router::new()
+            .route(
+                "/v1/responses",
+                get(cli_recovery_ws).post(cli_recovery_http),
+            )
+            .with_state(recovery.clone()),
+    )
+    .await;
+    let (next, next_server) = Stub::start("B", Behavior::Complete).await;
+    fixture.provider("A", &first.origin(), true);
+    fixture.provider("B", &next_server.origin(), false);
+    let (gateway, mut logs) = fixture.start().await;
+    let session = "unverifiable-context-loss";
+    let Message::Text(create) = create_message(Some(session)) else {
+        unreachable!()
+    };
+    let mut body: Value = serde_json::from_str(&create).unwrap();
+    body["input"][0]["type"] = json!("message");
+    // An item type the gateway cannot verify, e.g. one added by a newer Codex.
+    body["input"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"type":"future_item","payload":"opaque"}));
+    body["tools"] =
+        json!([{"type":"function","name":"shell_command","parameters":{"type":"object"}}]);
+    let first_input = body["input"].as_array().unwrap().clone();
+    let mut socket = connect(&gateway, session).await.unwrap();
+    socket.send(Message::Text(body.to_string())).await.unwrap();
+    let nonce = recv_until(&mut socket, "response.metadata").await["headers"]
+        [protocol::TURN_STATE_HEADER]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    recv_until(&mut socket, "response.completed").await;
+    assert_eq!(terminal_log(&mut logs).await.status, Some(200));
+
+    let tool_output = json!({"type":"function_call_output","call_id":"router_tool","output":"synthetic tool result"});
+    body["input"] = json!([tool_output]);
+    body["previous_response_id"] = json!("resp-tool");
+    body["client_metadata"][protocol::TURN_STATE_HEADER] = json!(nonce);
+    socket.send(Message::Text(body.to_string())).await.unwrap();
+    let error = recv_until(&mut socket, "error").await;
+    assert_eq!(error["error"]["code"], "previous_response_not_found");
+    terminal_log(&mut logs).await;
+    drop(socket);
+
+    // Without a recovery grant the full resend still runs, as a fresh generation.
+    let mut input = first_input;
+    input.push(recovery.tool_item.lock().unwrap().clone().unwrap());
+    input.push(tool_output);
+    body["input"] = json!(input);
+    body.as_object_mut().unwrap().remove("previous_response_id");
+    let mut socket = connect(&gateway, session).await.unwrap();
+    socket.send(Message::Text(body.to_string())).await.unwrap();
+    recv_until(&mut socket, "response.completed").await;
+    let log = terminal_log(&mut logs).await;
+    assert_eq!(log.status, Some(200));
+    assert!(!log
+        .special_settings_json
+        .unwrap_or_default()
+        .contains("\"recovery_from_trace_id\":\""));
+    assert_eq!(next.transports(), ["http"]);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn full_input_recovery_after_attempt_deadline_uses_remaining_provider_budget() {
     let fixture = Fixture::new(true).await;
     let recovery = CliRecoveryStub::default();
@@ -2128,6 +2192,42 @@ async fn client_cancel_after_content_logs_499_without_provider_health_damage() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn turn_continues_after_the_gateway_forgets_its_nonce() {
+    let fixture = Fixture::new(true).await;
+    let (stub, upstream) = Stub::start("A", Behavior::Complete).await;
+    fixture.provider("A", &upstream.origin(), true);
+    let (gateway, mut logs) = fixture.start().await;
+    let session = "forgotten-nonce";
+    let Message::Text(create) = create_message(Some(session)) else {
+        unreachable!()
+    };
+    let mut body: Value = serde_json::from_str(&create).unwrap();
+    body["input"][0]["type"] = json!("message");
+    let mut socket = connect(&gateway, session).await.unwrap();
+    socket.send(Message::Text(body.to_string())).await.unwrap();
+    let nonce = recv_until(&mut socket, "response.metadata").await["headers"]
+        [protocol::TURN_STATE_HEADER]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    recv_until(&mut socket, "response.completed").await;
+    assert_eq!(terminal_log(&mut logs).await.status, Some(200));
+    drop(socket);
+
+    // Restarting AIO or toggling WS settings forgets every owner; Codex keeps the nonce.
+    fixture.runtime.invalidate();
+    body["client_metadata"][protocol::TURN_STATE_HEADER] = json!(nonce);
+    body["input"] = json!([body["input"][0], events("A")[2]["item"], body["input"][0]]);
+    let mut socket = connect(&gateway, session).await.unwrap();
+    socket.send(Message::Text(body.to_string())).await.unwrap();
+    let echoed = recv_until(&mut socket, "response.metadata").await;
+    assert_eq!(echoed["headers"][protocol::TURN_STATE_HEADER], nonce);
+    recv_until(&mut socket, "response.completed").await;
+    assert_eq!(terminal_log(&mut logs).await.status, Some(200));
+    assert_eq!(stub.transports(), ["ws", "ws"]);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn codex_preempted_generation_continues_the_same_turn_on_a_new_socket() {
     let fixture = Fixture::new(true).await;
     let (stub, upstream) = Stub::start("A", Behavior::HoldAfterContent).await;
@@ -2166,11 +2266,12 @@ async fn codex_preempted_generation_continues_the_same_turn_on_a_new_socket() {
     drop(socket);
     assert_eq!(terminal_log(&mut logs).await.status, Some(499));
 
-    // ...and resend the same turn with its nonce on a fresh socket.
-    body["input"]
-        .as_array_mut()
-        .unwrap()
-        .push(user("steering input"));
+    // ...and resend the same turn, with the sub-agent message, on a fresh socket.
+    body["input"].as_array_mut().unwrap().push(json!({
+        "type":"agent_message", "id":"amsg_worker", "author":"/root/worker", "recipient":"/root",
+        "content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER"},{"type":"encrypted_content","encrypted_content":"opaque"}],
+        "internal_chat_message_metadata_passthrough":{"turn_id":"turn","create_time":1.5}
+    }));
     let mut socket = connect(&gateway, session).await.unwrap();
     socket.send(Message::Text(body.to_string())).await.unwrap();
     recv_until(&mut socket, "response.output_text.delta").await;
@@ -2638,12 +2739,23 @@ async fn prewarm_unavailability_does_not_hide_formal_log_or_override_ws_http_ret
         socket.send(Message::Text(body.to_string())).await.unwrap();
         let replay = recv_until(&mut socket, "error").await;
         assert_eq!(replay["error"], original["error"]);
-        assert_eq!(replay["trace_id"], original["trace_id"]);
+        // A failure with a recovery time is replayed until then; without one the retry
+        // is routed again, still with no upstream call.
+        let routed_again = |trace: &Value| {
+            if enabled_provider {
+                assert_eq!(trace, &original["trace_id"]);
+            } else {
+                assert_ne!(trace, &original["trace_id"]);
+            }
+        };
+        routed_again(&replay["trace_id"]);
         if enabled_provider {
             assert_eq!(
                 replay["headers"]["retry-after"],
                 replay["retry_after_seconds"].as_u64().unwrap().to_string()
             );
+        } else {
+            assert_eq!(terminal_log(&mut logs).await.status, Some(503));
         }
         drop(socket);
 
@@ -2657,11 +2769,15 @@ async fn prewarm_unavailability_does_not_hide_formal_log_or_override_ws_http_ret
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let replay: Value = response.json().await.unwrap();
         assert_eq!(replay["error"], original["error"]);
-        assert_eq!(replay["trace_id"], original["trace_id"]);
+        routed_again(&replay["trace_id"]);
+        if !enabled_provider {
+            assert_eq!(terminal_log(&mut logs).await.status, Some(503));
+        }
         assert!(logs.try_recv().is_err());
         assert!(stub.transports().is_empty());
         assert!(fixture.active.snapshot().is_empty());
 
+        // A different request in the turn (e.g. merged steering) is routed again, not replayed.
         body["input"][0]["content"][0]["text"] = json!("different request");
         let response = reqwest::Client::new()
             .post(format!("{}/v1/responses", gateway.origin()))
@@ -2669,18 +2785,10 @@ async fn prewarm_unavailability_does_not_hide_formal_log_or_override_ws_http_ret
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let rejected: Value = response.json().await.unwrap();
-        assert_eq!(rejected["status"], 400);
-        let log = terminal_log(&mut logs).await;
-        assert_eq!(log.status, Some(400));
-        assert_eq!(log.error_code.as_deref(), Some("GW_REQUEST_REJECTED"));
-        assert_ne!(log.trace_id, original["trace_id"]);
-        let details: Value =
-            serde_json::from_str(log.error_details_json.as_ref().unwrap()).unwrap();
-        assert_eq!(details["reason_code"], "invalid_request");
-        assert!(details["reason"].as_str().unwrap().contains("mismatch"));
-        assert!(logs.try_recv().is_err());
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let routed: Value = response.json().await.unwrap();
+        assert_eq!(routed["error"]["code"], code);
+        assert!(stub.transports().is_empty());
     }
 }
 
@@ -2738,6 +2846,49 @@ async fn unavailable_tool_delta_on_a_new_socket_returns_the_original_failure() {
     assert_eq!(upstream.calls.lock().unwrap().len(), 1);
     assert!(logs.try_recv().is_err());
     assert!(fixture.active.snapshot().is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retry_after_circuit_reset_routes_again_instead_of_replaying_the_failure() {
+    let fixture = Fixture::new(true).await;
+    let (stub, upstream) = Stub::start("A", Behavior::Complete).await;
+    let a = fixture.provider("A", &upstream.origin(), true);
+    fixture
+        .circuit
+        .record_failure(a, crate::gateway::util::now_unix_seconds() as i64, None);
+    let (gateway, mut logs) = fixture.start().await;
+    let session = "reset-after-unavailable";
+    let Message::Text(create) = create_message(Some(session)) else {
+        unreachable!()
+    };
+    let mut body: Value = serde_json::from_str(&create).unwrap();
+    body["input"][0]["type"] = json!("message");
+    let mut socket = connect(&gateway, session).await.unwrap();
+    socket.send(Message::Text(body.to_string())).await.unwrap();
+    let nonce = recv_until(&mut socket, "response.metadata").await["headers"]
+        [protocol::TURN_STATE_HEADER]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let original = recv_until(&mut socket, "error").await;
+    assert_eq!(original["error"]["code"], "GW_ALL_PROVIDERS_UNAVAILABLE");
+    assert!(original["retry_after_seconds"].as_u64().unwrap() > 0);
+    assert_eq!(terminal_log(&mut logs).await.status, Some(503));
+    drop(socket);
+
+    // What GatewayRuntime::circuit_reset_provider does when the user resets the circuit.
+    let now = crate::gateway::util::now_unix_seconds() as i64;
+    fixture.circuit.reset(a, now);
+    fixture.recent_errors.lock().unwrap().clear();
+    fixture.runtime.clear_failures();
+
+    // Codex retries the same full request on a new socket within the old Retry-After window.
+    body["client_metadata"][protocol::TURN_STATE_HEADER] = json!(nonce);
+    let mut socket = connect(&gateway, session).await.unwrap();
+    socket.send(Message::Text(body.to_string())).await.unwrap();
+    recv_until(&mut socket, "response.completed").await;
+    assert_eq!(terminal_log(&mut logs).await.status, Some(200));
+    assert_eq!(stub.transports(), ["ws"]);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2841,18 +2992,19 @@ async fn real_codex_cli_reports_circuit_failure_with_finite_retries() {
         while let Ok(row) = logs.try_recv() {
             rows.push(row);
         }
-        assert_eq!(
-            rows.len(),
-            1,
-            "one formal failure, with prewarm and result reads excluded"
-        );
-        assert_eq!(rows[0].status, Some(503));
+        // Reads within Retry-After reuse the first failure; once it passes, each retry is
+        // routed again and logged as its own 503, still without an upstream call.
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(|row| row.status == Some(503)), "{rows:?}");
+        if retry_after.is_none() || (stream, request) == (Some(0), Some(0)) {
+            assert_eq!(rows.len(), 1, "prewarm and result reads are excluded");
+        }
         if retry_after == Some(31) {
             assert!(elapsed >= 30.0, "must cross the pending recovery TTL");
         }
         let requests = requests.lock().unwrap();
         let report = json!({"client":String::from_utf8_lossy(&version.stdout).trim(),"stream_max_retries":stream,"request_max_retries":request,"controlled_retry_after":retry_after,"elapsed_seconds":elapsed,"ws_handshakes":requests.iter().filter(|request| request["status"] == 101).count(),"http_posts":requests.iter().filter(|request| request["method"] == "POST").count(),"upstream_calls":0,"request_log_rows":rows.len(),"requests":*requests,"events":events,"exit":output.status.code()});
-        println!("Codex circuit failure: stream={stream:?}, request={request:?}, wait={retry_after:?}, elapsed={elapsed:.2}s, WS={}, HTTP={}, upstream=0, logs=1", report["ws_handshakes"], report["http_posts"]);
+        println!("Codex circuit failure: stream={stream:?}, request={request:?}, wait={retry_after:?}, elapsed={elapsed:.2}s, WS={}, HTTP={}, upstream=0, logs={}", report["ws_handshakes"], report["http_posts"], rows.len());
         reports.push(report);
         std::fs::write(
             "/tmp/aio-codex-unavailable-validation.json",

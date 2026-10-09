@@ -208,8 +208,8 @@ HTTP 恢复拒绝发生在活动请求登记之前，当前证据证明的是缺
 1. 首轮只为标准的 `status=503` 且错误码为 `GW_ALL_PROVIDERS_UNAVAILABLE/GW_NO_ENABLED_PROVIDER` 的已结束生成保留摘要。`previous_response_not_found`、待恢复的传输错误、输出后错误、取消、输入错误以及插件自定义结果不纳入这个能力，维持现有处理。避免把未完成的恢复变成一个永远只返回恢复错误的终态。
 2. 在已有 owner 记录中保留上述通用失败摘要及其匹配摘要：状态、错误码、最终消息、trace、已知恢复期限，原增量输入与 previous_response_id、合法全量输入及约束的摘要。采用既有 hook 同步后的标准失败结果，读取时通过同一客户端适配入口编码；不保存 WS JSON、请求或工具历史，不新增独立缓存服务。
 3. 请求准备入口区分“合法恢复并承接预算”“匹配已结束生成，返回原失败”“非法恢复”。WS 和 HTTP 共用 runtime 的结果匹配，先验证 owner/nonce/epoch 和摘要；命中结果后直接返回，早于本连接 continuation 校验、HTTP 恢复缓冲区预留、pending 认领和 `begin_generation`。这样新连接不必拥有已失败请求的 continuation，也不会因为资源压力丢失已知失败。已有 http_only 约束限制执行传输，不阻止合法读取失败结果。
-4. 允许的两种输入是原增量请求（包含相同 previous_response_id）或已保存 expected 摘要所对应的完整重发；修改 previous_response_id、约束、历史、nonce 或窗口仍明确拒绝。命中不领取预算，不派发上游。没有匹配结果时继续原有恢复与归属流程，不捕获所有归属错误后猜测是否应返回 503。
-5. 已知失败结果沿用既有 `OWNER_IDLE_TTL`（30 分钟）与 `MAX_RECOVERIES`（128 个 owner 条目）；结果命中不续期。这一保留只允许读取失败结果，128 是记录容量，不是允许客户端重新执行的次数。pending 恢复授权仍使用原 30 秒 TTL 和单次认领规则，可恢复的上下文错误不得填充终态摘要。容量满时沿用淘汰闲置 owner 的规则，不挤掉 active/pending。其他非法恢复/取消的退役规则保持原语义；新的用户轮次按其新 owner 正常处理。
+4. 允许的两种输入是原增量请求（包含相同 previous_response_id）或已保存 expected 摘要所对应的完整重发；nonce 冲突仍明确拒绝。（2026-10-09 起，previous_response_id、约束或历史不同的请求不再拒绝，按普通请求重新选路，见 8.4。）命中不领取预算，不派发上游。没有匹配结果时继续原有恢复与归属流程，不捕获所有归属错误后猜测是否应返回 503。
+5. 已知失败结果沿用既有 `OWNER_IDLE_TTL`（30 分钟）与 `MAX_RECOVERIES`（128 个 owner 条目）；结果命中不续期。（2026-10-09 起只保存带 Retry-After 的结果，并只重放到该时间为止；重置熔断或清除不可用错误时一并清空，见 8.4。）这一保留只允许读取失败结果，128 是记录容量，不是允许客户端重新执行的次数。pending 恢复授权仍使用原 30 秒 TTL 和单次认领规则，可恢复的上下文错误不得填充终态摘要。容量满时沿用淘汰闲置 owner 的规则，不挤掉 active/pending。其他非法恢复/取消的退役规则保持原语义；新的用户轮次按其新 owner 正常处理。（2026-10-09 起取消/失败不再退役 nonce，见 8.4。）
 
 其他既有预算和恢复边界继续保持：
 
@@ -296,7 +296,7 @@ AIO 复用 [requestActivityProjection.ts](../src/services/gateway/requestActivit
 | 工具轮暂时不可用 | 初次生成和工具结果增量两种入口均保持原 503；合法同形 WS 重试和完整 HTTP 重发都能读取原失败；不把工具轮认作新预算 |
 | 输出后断流 | 明确失败；网关不换家、不重放；真实 CLI 工具副作用无重复 |
 | 重复、并发和迟到恢复 | 不能双认领或领取新预算；一个窗口失败不影响另一个窗口 |
-| 已知失败保留到期与容量 | 读取不续期，30 分钟到期后按原规则拒绝；128 条上限使用既有闲置淘汰，active/pending 不被替换；配置 epoch 失效后不复用旧结果 |
+| 已知失败保留到期与容量 | 读取不续期；到 Retry-After 后重新选路，没有 Retry-After 的结果不保存，重置熔断后立即重新选路；128 条上限使用既有闲置淘汰，active/pending 不被替换；配置 epoch 失效后不复用旧结果 |
 | 冷却到期、限额重置和配置更新 | 错误缓存和路由按已有失效规则释放；后续新请求能够恢复 |
 | 普通 HTTP、取消和关闭 WS | 原功能正常；取消后没有新增上游发送；连接与资源释放 |
 | HTTP 恢复拒绝 | 独立 400 有状态/具体原因/trace 和错误记录；observe 在拒绝前已正确计算，记录不再被静默跳过；不误标供应商失败、不留下活动请求 |
@@ -370,3 +370,38 @@ R1–R8 已落实到现有请求链：会话选择只保留候选与偏好，统
 最终 Codex 熔断矩阵的默认/默认组合为 7 次 WS Upgrade、30 次 HTTP POST，31.41 秒后结束；跨 pending TTL 的独立组合等待 30.22 秒，仍返回原 503。默认重试组由测试 hook 提供 1 秒 Retry-After，跨 TTL 组提供 31 秒，未修改生产或用户 CLI 重试配置。七组均验证首次/最终原因一致、上游 0、正式失败日志 1。原先两个真实 Codex 工具/连续 turn 用例与新增两个实际 CLI 用例均显式执行通过；其余 ignored 用例未计入通过数。
 
 实际程序为本机 `/Users/homemac/.volta/tools/image/packages/@openai/codex/lib/node_modules/@openai/codex/bin/codex.js` 与 `/Users/homemac/.volta/bin/claude`；测试运行时读取版本，不以 shell 名称推定版本，不修改用户配置。详细本地结果在 `/tmp/aio-codex-unavailable-validation.json` 和 `/tmp/aio-claude-unavailable-validation.json`。Codex 请求计数记录 Upgrade/HTTP POST；没有把 Upgrade 次数等同于 WS create 帧数。503 仍允许客户端按自己的有限策略重试，修复保证失败原因正确、受拒绝的上游不发送、预算不刷新，而不承诺所有客户端立即退出。
+
+### 8.4 2026-10-09 受控恢复改为尽力而为
+
+**现象**（本机 AIO 请求日志与 `~/.codex` 日志）：
+
+- 2026-10-09 共 32 次 `context recovery ownership mismatch`，其中 27 次发生在同会话上一个 WS 生成以 499 结束后约 125–150 ms，其余跟在 502/503 之后。Codex 日志显示，子 agent 消息到达（`has_pending_input=true`）或用户插话时，Codex 中止进行中的流，在新连接上用同一 turn nonce 续发；流失败后的自动重试也是如此。网关把未正常完成的生成退役了 nonce，续发被拒，Codex 不重试这个 400，整个 turn 失败。
+- 去掉退役后出现 `context recovery contains unsupported history`：续发的完整历史包含 Codex 多 agent 的 `agent_message`（team message），历史投影不认识该类型。本机 223 个 Codex 会话含此类条目。
+- AIO 重启后出现 `unknown or expired Responses owner nonce`：Codex 在整个 turn 内保留首个 nonce（OnceLock），网关已丢失记录。
+- 16 次 `Response context cannot be safely restored`：上游丢失上下文时，历史无法验证（例如含 `agent_message`）导致无法挂起，直接返回 400。
+- 已知 503 在 owner 上最长保留 30 分钟，供应商恢复或手动重置熔断后，同一请求的重试仍拿到旧结果。
+
+**决策**：恢复预算只是优化，不是请求准入条件。网关只在真实冲突时拒绝：伪造或跨 owner 的 nonce、同一 owner 并发生成、条目数不增长的回放、pending 的重复认领以及迟到或部分回放。其余无法匹配的情况一律按新生成执行，不领取旧预算。
+
+**实施**：
+
+| 位置 | 变化 |
+| --- | --- |
+| `state.rs` `finish_generation` / `prune_owners` | 生成以任何方式结束都只释放 active 与已消费的 pending；成功时推进已完成历史；删除 `retired` |
+| `state.rs` `claim_for_transport` | 无 pending 时直接按新生成放行，回放由 `begin_generation` 的条目数增长检查拦截；pending 完全匹配才领取；条目数更多的不一致请求作废 pending 后按新生成执行，其余不一致请求拒绝且保留 pending；没有任何记录跟踪的 turn 以客户端回传的 nonce 建立新 owner |
+| `state.rs` `known_failure` / `remember_failure` | 不同请求不再拒绝，改为正常选路；只保存带 Retry-After 的 503，到期自动丢弃 |
+| `runtime.rs` | `clear_recent_errors` / `clear_unavailable_errors`（重置熔断、OAuth 额度恢复）同时清空 owner 的已知失败 |
+| `ws_attempt.rs` `recover` | 增量请求即使无法挂起恢复记录，也返回 `previous_response_not_found`，让客户端重发完整输入 |
+| `protocol.rs` | 历史投影支持 `agent_message`（`author/recipient` + `input_text/encrypted_content`）；删除不再使用的 `is_strict_prefix_of` |
+
+**验证**：
+
+| 验证 | 结果 |
+| --- | --- |
+| `cargo test --lib` | 2287 通过，0 失败，9 ignored |
+| `cargo clippy --all-targets -- -D warnings`、`cargo fmt` | 通过 |
+| 新增集成用例 | 抢占后携带 `agent_message` 续发、网关遗忘 nonce 后 turn 继续、历史无法验证时上游丢失上下文后完整重发、重置熔断后重试重新选路；前 3 个在修复前代码上失败，第 4 个在不清空 owner 失败时失败 |
+| 新增/调整单元用例 | `agent_message` 投影与防篡改、生成结束释放 turn、首个生成失败后可重试、已认领预算不复活、更长重发作废 pending 而回放保留 pending、无 Retry-After 或重置后重新选路；原先断言“直接拒绝”的用例改为断言最终仍不被接受，或拿不到恢复预算 |
+| 真实 Codex CLI `0.161.0`（`AIO_CODEX_WS_TEST_CLI`，4 个 ignored 用例显式执行） | 全部通过：本地摘要与远程 checkpoint 自动压缩各 3 次正式 WS 请求、工具执行 1 次；上下文重建后切家且工具不重复；连续两轮与工具增量保持 WS 上下文；熔断矩阵每组都显示原熔断原因、上游调用 0 |
+
+熔断矩阵的正式失败日志数随之变化：无重试或 31 秒 Retry-After 窗口内仍为 1 条（结果重放）。测试 hook 提供 1 秒 Retry-After 的组合在到期后每次重试都重新选路，并各自记录一条 503（3–31 条），仍然不调用上游。真实 CLI 用例的断言已相应放宽为“全部为 503，无重试组恰好 1 条”。

@@ -205,10 +205,12 @@ impl GatewayRuntime {
     }
 
     pub(crate) fn clear_recent_errors(&self) -> usize {
+        self.responses_ws.clear_failures();
         self.recent_errors.lock_or_recover().clear()
     }
 
     pub(crate) fn clear_unavailable_errors(&self) -> usize {
+        self.responses_ws.clear_failures();
         self.recent_errors.lock_or_recover().clear_unavailable()
     }
 

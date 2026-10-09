@@ -195,7 +195,18 @@ impl Runtime {
             // Local compaction opens another client session within the same turn.
             return Ok(record.nonce.clone());
         }
-        if !records.contains_key(owner) && records.len() >= MAX_RECOVERIES {
+        let nonce = new_nonce();
+        self.insert_owner(&mut records, owner, nonce.clone())?;
+        Ok(nonce)
+    }
+
+    fn insert_owner(
+        &self,
+        records: &mut HashMap<Owner, OwnerRecord>,
+        owner: &Owner,
+        nonce: String,
+    ) -> Result<(), &'static str> {
+        if records.len() >= MAX_RECOVERIES {
             let oldest = records
                 .iter()
                 .filter(|(_, record)| {
@@ -209,11 +220,10 @@ impl Runtime {
                 return Err("Responses recovery owner capacity reached");
             }
         }
-        let nonce = new_nonce();
         records.insert(
             owner.clone(),
             OwnerRecord {
-                nonce: nonce.clone(),
+                nonce,
                 epoch: self.epoch(),
                 active_generation: None,
                 http_only: false,
@@ -224,7 +234,7 @@ impl Runtime {
                 expires: Instant::now() + OWNER_IDLE_TTL,
             },
         );
-        Ok(nonce)
+        Ok(())
     }
 
     /// Admit one generation globally for this owner, including across sockets.
@@ -346,16 +356,20 @@ impl Runtime {
         {
             return;
         }
-        record.failure = Some(KnownFailure {
-            retry_at: failure
-                .retry_after_seconds
-                .and_then(|seconds| Instant::now().checked_add(Duration::from_secs(seconds))),
-            failure,
-            input: generation.input.clone(),
-            expected: generation.expected.clone(),
-            properties: generation.properties.clone(),
-            previous: generation.previous.clone(),
-        });
+        // Replay only until the announced recovery time; without one a retry is simply
+        // routed again, which costs no upstream call while providers stay unavailable.
+        record.failure = failure
+            .retry_after_seconds
+            .filter(|seconds| *seconds > 0)
+            .and_then(|seconds| Instant::now().checked_add(Duration::from_secs(seconds)))
+            .map(|retry_at| KnownFailure {
+                retry_at,
+                failure,
+                input: generation.input.clone(),
+                expected: generation.expected.clone(),
+                properties: generation.properties.clone(),
+                previous: generation.previous.clone(),
+            });
     }
 
     /// Read an ended result before validating socket continuation or claiming recovery resources.
@@ -389,13 +403,24 @@ impl Runtime {
         let original = previous == known.previous.as_deref() && input == known.input;
         let full = previous.is_none() && input == known.expected;
         if !input.is_recoverable() || *properties != known.properties || !(original || full) {
-            return Err("context recovery history or constraints mismatch");
+            // Not a retry of the failed request (e.g. steering was merged): route it normally.
+            return Ok(None);
         }
         let mut failure = known.failure.clone();
-        failure.retry_after_seconds = known
-            .retry_at
-            .map(|at| at.saturating_duration_since(Instant::now()).as_secs());
+        failure.retry_after_seconds = Some(
+            known
+                .retry_at
+                .saturating_duration_since(Instant::now())
+                .as_secs(),
+        );
         Ok(Some(failure))
+    }
+
+    /// Circuit resets and cleared unavailability make remembered failures stale.
+    pub(in crate::gateway) fn clear_failures(&self) {
+        for record in self.owners.lock_or_recover().values_mut() {
+            record.failure = None;
+        }
     }
 
     pub(in crate::gateway) fn suspend(&self, request: &RequestState) -> Result<(), &'static str> {
@@ -517,11 +542,23 @@ impl Runtime {
             }
         }
         let Some(record) = records.get_mut(owner) else {
-            return if nonce.is_some_and(is_local_nonce) {
-                Err("unknown or expired Responses owner nonce")
-            } else {
-                Ok(None)
+            let Some(nonce) = nonce.filter(|nonce| is_local_nonce(nonce)) else {
+                return Ok(None);
             };
+            let tracked = records.iter().any(|(known, record)| {
+                record.nonce == nonce
+                    || (known.session == owner.session
+                        && known.thread == owner.thread
+                        && known.turn == owner.turn)
+            });
+            if !self.enabled() || tracked {
+                return Err("unknown or expired Responses owner nonce");
+            }
+            // Codex keeps a turn's first nonce for the whole turn. After a gateway restart,
+            // settings change or idle expiry nothing tracks the turn any more, so it continues
+            // under that nonce as a fresh owner; no recovery grant survives the lost record.
+            self.insert_owner(&mut records, owner, nonce.to_owned())?;
+            return Ok(None);
         };
         if nonce.is_none() && record.active_generation.is_none() && record.pending.is_none() {
             return Ok(None);
@@ -534,25 +571,21 @@ impl Runtime {
         {
             return Err("context recovery ownership mismatch");
         }
-        let expected = HistoryDigest::from_items(input);
-        if !expected.is_recoverable() || !properties.is_recoverable() {
-            return Err("context recovery contains unsupported history");
-        }
+        // Recovery is best effort: a request the gateway cannot match to its grant is
+        // still the client's authoritative history, so it runs as a fresh generation.
         let Some(pending) = record.pending.as_mut() else {
-            // A released turn continues as a fresh generation without any recovery budget;
-            // before its first success there is no history a retry could replay.
-            return if record
-                .completed
-                .as_ref()
-                .is_none_or(|history| history.is_strict_prefix_of(input))
-            {
-                Ok(None)
-            } else {
-                Err("context recovery has no matching generation")
-            };
+            return Ok(None);
         };
-        if pending.consumed || pending.properties != *properties || expected != pending.expected {
+        let expected = HistoryDigest::from_items(input);
+        let exact = expected == pending.expected && pending.properties == *properties;
+        if pending.consumed || (!exact && expected.count <= pending.expected.count) {
             return Err("context recovery history or constraints mismatch");
+        }
+        if !exact {
+            // A longer resend supersedes the suspended request, e.g. Codex merged steering
+            // or sub-agent input into it; stale or partial replays keep the grant intact.
+            record.pending = None;
+            return Ok(None);
         }
         pending.consumed = true;
         Ok(Some(Recovered {
@@ -730,6 +763,13 @@ fn prune_owners(records: &mut HashMap<Owner, OwnerRecord>) {
             record.pending = None;
             record.expires = now + OWNER_IDLE_TTL;
         }
+        if record
+            .failure
+            .as_ref()
+            .is_some_and(|known| known.retry_at <= now)
+        {
+            record.failure = None;
+        }
     }
     records.retain(|_, record| record.active_generation.is_some() || record.expires > now);
 }
@@ -829,7 +869,7 @@ impl PreparedRequest {
 
 struct KnownFailure {
     failure: GatewayFailure,
-    retry_at: Option<Instant>,
+    retry_at: Instant,
     input: HistoryDigest,
     expected: HistoryDigest,
     properties: HistoryDigest,
@@ -975,6 +1015,29 @@ mod tests {
         }
     }
 
+    /// Claim then admit a fresh generation, as ingress does for every create.
+    fn begin_fresh(
+        runtime: &Arc<Runtime>,
+        owner: &Owner,
+        nonce: &str,
+        items: &[Value],
+    ) -> Result<(), &'static str> {
+        assert!(runtime
+            .claim(owner, Some(nonce), items, &HistoryDigest::default())?
+            .is_none());
+        let request = request(runtime, nonce, items, false);
+        request
+            .generation
+            .lock_or_recover()
+            .identity
+            .as_mut()
+            .unwrap()
+            .owner = owner.clone();
+        runtime.begin_generation(&request)?;
+        runtime.finish_generation(&request, false);
+        Ok(())
+    }
+
     #[test]
     fn recovery_requires_nonce_exact_history_and_single_claim() {
         let runtime = Arc::new(Runtime::new(true));
@@ -1043,17 +1106,11 @@ mod tests {
         runtime.begin_generation(&compacted).unwrap();
         runtime.finish_generation(&compacted, true);
         assert_eq!(runtime.issue_nonce(&compacted_owner).unwrap(), nonce);
+        drop((original, compacted));
         assert!(runtime
             .claim(&owner(), Some(&nonce), &items, &HistoryDigest::default())
             .is_err());
-        assert!(runtime
-            .claim(
-                &compacted_owner,
-                Some(&nonce),
-                &summary,
-                &HistoryDigest::default()
-            )
-            .is_err());
+        assert!(begin_fresh(&runtime, &compacted_owner, &nonce, &summary).is_err());
         let extended = vec![input("compacted history"), input("next tool result")];
         assert!(runtime
             .claim(
@@ -1149,17 +1206,21 @@ mod tests {
             }
             let mut compacted_owner = owner();
             compacted_owner.context_window = "compacted".into();
-            assert!(
-                runtime
-                    .claim(
-                        &compacted_owner,
-                        Some(&nonce),
-                        &[input("summary")],
-                        &HistoryDigest::default()
-                    )
-                    .is_err(),
-                "must preserve {state} generation ownership"
+            let claimed = runtime.claim(
+                &compacted_owner,
+                Some(&nonce),
+                &[input("summary")],
+                &HistoryDigest::default(),
             );
+            if state == "expired" {
+                // Nothing tracks the turn any more: it continues fresh, without old budget.
+                assert!(claimed.unwrap().is_none());
+            } else {
+                assert!(
+                    claimed.is_err(),
+                    "must preserve {state} generation ownership"
+                );
+            }
         }
     }
 
@@ -1295,6 +1356,7 @@ mod tests {
             assert!(result.retry_after_seconds.unwrap() <= 60);
             assert_eq!(runtime.owners.lock_or_recover()[&owner()].expires, expires);
         }
+        // Other requests in the turn are not retries of the failure and route normally.
         assert!(runtime
             .known_failure(
                 &owner(),
@@ -1303,7 +1365,8 @@ mod tests {
                 Some("changed"),
                 &properties
             )
-            .is_err());
+            .unwrap()
+            .is_none());
         assert!(runtime
             .known_failure(
                 &owner(),
@@ -1312,14 +1375,15 @@ mod tests {
                 None,
                 &request_properties(&body, None)
             )
-            .is_err());
+            .unwrap()
+            .is_none());
         assert!(runtime
             .known_failure(&owner(), Some("aio-ws-forged"), &items, None, &properties)
             .is_err());
-        assert!(runtime.begin_generation(&original).is_err());
         assert!(runtime
-            .claim(&owner(), Some(&nonce), &items, &properties)
-            .is_err());
+            .claim_for_transport(&owner(), Some(&nonce), &items, &properties, false)
+            .unwrap()
+            .is_none());
 
         // Both buffer reservations are occupied; result reading still works over HTTP.
         let _other_connection = runtime.connection().unwrap();
@@ -1334,9 +1398,11 @@ mod tests {
         {
             let mut records = runtime.owners.lock_or_recover();
             let known = records.get_mut(&owner()).unwrap().failure.as_mut().unwrap();
-            known.retry_at = Some(Instant::now().checked_sub(Duration::from_secs(31)).unwrap());
+            known.retry_at = Instant::now().checked_sub(Duration::from_secs(31)).unwrap();
         }
-        assert_eq!(read().unwrap().unwrap().retry_after_seconds, Some(0));
+        // Once providers may have recovered, the same retry is routed again.
+        assert!(read().unwrap().is_none());
+        assert!(runtime.owners.lock_or_recover()[&owner()].failure.is_none());
         runtime
             .owners
             .lock_or_recover()
@@ -1347,6 +1413,45 @@ mod tests {
         assert!(runtime
             .prepare_http_recovery(&headers, &body, Some(3))
             .is_err());
+    }
+
+    #[test]
+    fn unavailability_without_recovery_time_or_after_reset_is_routed_again() {
+        for case in ["no_retry_time", "reset"] {
+            let runtime = Arc::new(Runtime::new(true));
+            let nonce = runtime.issue_nonce(&owner()).unwrap();
+            let items = vec![input("first")];
+            let original = request(&runtime, &nonce, &items, false);
+            runtime.begin_generation(&original).unwrap();
+            runtime.remember_failure(
+                &original,
+                &GatewayFailure {
+                    status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    trace_id: "original".into(),
+                    error_code: "GW_ALL_PROVIDERS_UNAVAILABLE".into(),
+                    message: "No available providers".into(),
+                    attempts: vec![],
+                    retry_after_seconds: (case == "reset").then_some(60),
+                },
+            );
+            runtime.finish_generation(&original, false);
+            drop(original);
+            let read = || {
+                runtime.known_failure(
+                    &owner(),
+                    Some(&nonce),
+                    &items,
+                    None,
+                    &HistoryDigest::default(),
+                )
+            };
+            if case == "reset" {
+                assert_eq!(read().unwrap().unwrap().trace_id, "original");
+                runtime.clear_failures();
+            }
+            assert!(read().unwrap().is_none());
+            assert!(begin_fresh(&runtime, &owner(), &nonce, &items).is_ok());
+        }
     }
 
     #[test]
@@ -1422,7 +1527,7 @@ mod tests {
     }
 
     #[test]
-    fn expired_unknown_and_disabled_nonces_cannot_open_fresh_budget() {
+    fn expired_nonce_continues_fresh_while_forged_and_disabled_nonces_are_rejected() {
         let runtime = Arc::new(Runtime::new(true));
         let nonce = runtime.issue_nonce(&owner()).unwrap();
         let items = vec![input("synthetic")];
@@ -1437,9 +1542,8 @@ mod tests {
             .get_mut(&owner())
             .unwrap()
             .expires = Instant::now();
-        assert!(runtime
-            .claim(&owner(), Some(&nonce), &items, &HistoryDigest::default())
-            .is_err());
+        // A gateway restart or idle expiry forgets the turn; it continues without a budget.
+        assert!(begin_fresh(&runtime, &owner(), &nonce, &items).is_ok());
         assert!(runtime
             .claim(
                 &owner(),
@@ -1668,9 +1772,7 @@ mod tests {
             } else {
                 runtime.finish_generation(&ended, false);
             }
-            assert!(runtime
-                .claim(&owner(), Some(&nonce), &first, &HistoryDigest::default())
-                .is_err());
+            assert!(begin_fresh(&runtime, &owner(), &nonce, &first).is_err());
             assert!(runtime
                 .claim(
                     &owner(),
@@ -1714,9 +1816,39 @@ mod tests {
         runtime.begin_generation(&retry).unwrap();
         runtime.finish_generation(&retry, true);
         drop(retry);
-        assert!(runtime
-            .claim(&owner(), Some(&nonce), &items, &HistoryDigest::default())
-            .is_err());
+        assert!(begin_fresh(&runtime, &owner(), &nonce, &items).is_err());
+    }
+
+    #[test]
+    fn longer_resend_supersedes_a_pending_grant_but_stale_replays_keep_it() {
+        for superseded in [false, true] {
+            let runtime = Arc::new(Runtime::new(true));
+            let nonce = runtime.issue_nonce(&owner()).unwrap();
+            let items = vec![input("first"), input("tool result")];
+            let original = request(&runtime, &nonce, &items, false);
+            runtime.begin_generation(&original).unwrap();
+            runtime.suspend(&original).unwrap();
+            runtime.finish_generation(&original, false);
+            drop(original);
+            assert!(runtime
+                .claim(
+                    &owner(),
+                    Some(&nonce),
+                    &items[..1],
+                    &HistoryDigest::default()
+                )
+                .is_err());
+            if superseded {
+                let steered = vec![input("first"), input("tool result"), input("steer")];
+                assert!(begin_fresh(&runtime, &owner(), &nonce, &steered).is_ok());
+                assert!(runtime.owners.lock_or_recover()[&owner()].pending.is_none());
+            } else {
+                assert!(runtime
+                    .claim(&owner(), Some(&nonce), &items, &HistoryDigest::default())
+                    .unwrap()
+                    .is_some());
+            }
+        }
     }
 
     #[test]
