@@ -305,8 +305,9 @@ mod tests {
     }
 
     struct GrokMcpTestApp {
-        _lock: MutexGuard<'static, ()>,
+        // 字段按声明顺序 drop：必须先恢复环境变量再释放锁，否则下一个测试会把本测试的 env 当原值保存。
         _env: EnvRestore,
+        _lock: MutexGuard<'static, ()>,
         _home: tempfile::TempDir,
         app: tauri::App<tauri::test::MockRuntime>,
     }
