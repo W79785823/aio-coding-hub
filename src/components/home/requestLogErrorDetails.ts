@@ -341,7 +341,11 @@ export function resolveRequestLogErrorObservation(
     upstreamBodyPreview: parsedJson.upstreamBodyPreview,
     upstreamStatus:
       parsedJson.upstreamStatus ??
-      (selectedLog.status != null && selectedLog.status >= 400 ? selectedLog.status : null),
+      (parsedJson.errorCategory !== "local" &&
+      selectedLog.status != null &&
+      selectedLog.status >= 400
+        ? selectedLog.status
+        : null),
   };
 
   if (hasObservationSignal(observation)) {

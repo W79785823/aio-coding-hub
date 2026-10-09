@@ -148,3 +148,41 @@ AIO_CODEX_WS_TEST_CLI=/absolute/path/to/codex   cargo test --locked --manifest-p
 测试机证据：`/tmp/aio-ws-version-gateway.log`、`/tmp/aio-ws-real-cli-desktop-final.log`、`/tmp/aio-ws-real-cli-standalone-final.log`、`/tmp/aio-ws-desktop-probe-all.json`。分组存在重叠，不相加作为独立用例总数。macOS arm64 本地打包已通过：`pnpm tauri:build:mac:arm64` 退出 0，产物位于 `src-tauri/target/aarch64-apple-darwin/release/bundle/macos/AIO Coding Hub.app`，构建日志为 `/tmp/aio-ws-version-build.log`。尚未替换或重启用户正在运行的应用。
 
 本轮未向远程生产供应商发送 WS 生成请求，未修改服务器配置。Windows/Linux/WSL 实机、VPN/企业证书、睡眠唤醒及 UI 视觉验收仍未完成；loopback 测试不代替这些验收，也不保证任意客户端的自动恢复行为。
+
+## 自动压缩 owner nonce 修复（2026-10-09）
+
+本机 AIO `0.60.20` 的 `1791518420-3113`、`1791511181-1513` 均在 Codex 自动压缩后、发送上游请求前返回 `unknown or expired Responses owner nonce`，`attempts=[]`、`upstream_sent=false`。实际独立 CLI 为 `0.161.0`。强制自动压缩的真实 CLI 用例复现了两个状态衔接问题：独立压缩 client session 再次签发 nonce 会覆盖原完成记录；压缩后 `context_window_id` 与 `<thread>:<编号>` 格式的 `window_id` 都会改变，但同一 turn 的主 client session 继续回传最初的 nonce。重新发送不同 nonce 的 metadata 无法覆盖客户端已保存的值。
+
+修复复用已完成 owner 的原 nonce，并按 [恢复关联与隔离合同](./codex-responses-websocket-development-spec.md#74-恢复关联与隔离) 原子迁移成功记录到新上下文。仅新生成获得新预算；pending、失败、取消、过期、错误 nonce、跨 session/thread/turn、倒退编号和旧上下文重放仍拒绝。每个 owner 的旧上下文标识最多 128 个，不保存输入正文；HTTP 受控响应的 stream lease 在成功终态、失败或取消时按相同规则收尾，避免完成后仍占用 active generation。
+
+本轮在 macOS arm64、临时 HOME/CODEX_HOME 与 loopback 上游验证，未使用用户认证或远程供应商：
+
+- `pnpm tauri:test -- responses_ws --lib`：87 通过、0 失败、5 默认忽略；包含 WS/HTTP 连续两次压缩、工具续接、原预算恢复与失败隔离。
+- 随后新增的 HTTP lease 定向测试：1 通过；只有成功终态释放下一轮资格，`response.failed`、EOF 和终态发送前取消均不能续用 nonce。
+- 显式独立 Codex `0.161.0` 的 `real_codex_cli_`：4 通过，包括真实自动压缩、两个用户 turn、上下文恢复后跨供应商 HTTP 完成及有限错误重试。自动压缩与恢复工具均只执行一次。
+- 显式桌面内置 Codex `0.162.0-alpha.2` 的自动压缩用例：1 通过；同 turn 切换上下文后完成，工具只执行一次。
+- 静态检查：`pnpm tauri:check`、`pnpm tauri:clippy`（all-targets、warnings as errors）、`pnpm tauri:fmt`、`pnpm check:spec-links` 和 `git diff --check` 均通过。
+
+未打包、安装或替换运行中的 AIO，也未修改真实 CLI 配置；现有安装须使用包含本修复的新构建才会生效。远程供应商、Windows/Linux/WSL 实机及睡眠唤醒组合未在本轮验证。版本仅为验证证据，运行时没有版本白名单。
+
+### 复审修复
+
+原自动压缩 CLI 用例使用自定义供应商，只覆盖本地摘要压缩；原断言也不能证明正式请求走 WS，强制 HTTP 后仍能通过。此次通过正式请求的 RequestEnd 记录逐轮断言入站 WS、唯一成功的上游 WS `selected` 记录，同时核对压缩前的 owner、压缩后的 window/context 变化及工具只执行一次。远程路径使用 `OpenAI` 供应商能力触发真实 CLI 的 `compaction_trigger`，模拟上游返回官方 `compaction` checkpoint；后续请求必须保留 checkpoint 原值。两种压缩分别验收，不以预热建连次数代替正式 WS 请求证据。
+
+历史摘要新增这两个已知官方类型。远程 checkpoint 后的 WS/HTTP 工具续接、两次上下文切换及未提交恢复仍保留语义 ID、加密内容、请求约束和原预算；改变 checkpoint 或未知字段继续拒绝恢复。该协议用例在修复前复现了 `context recovery contains unsupported history`，不据此推断所有实际断流或安全恢复拒绝都由远程压缩引起。
+
+正式 WS create 的 nonce 与生成准入拒绝共用已有 RequestEnd 通道：错误帧和 400 终态日志使用同一 trace，保留静态原因，attempts 为空、upstream_sent=false，未调用上游或改变供应商健康，不记录 nonce/正文。原失败结果读取与预热不重复记正式日志。前端详情仅对本地错误停止从请求 400 推断上游状态；明确记录的上游状态与旧日志显示保留。
+
+最终功能回归（macOS arm64，临时配置、合成认证、loopback 上游）：
+
+| 验证 | 结果 |
+| --- | --- |
+| `pnpm tauri:test -- responses_ws --lib` | 91 通过、0 失败、5 默认忽略；包含远程 checkpoint HTTP 工具续接、预算与篡改校验、错/失效 nonce 和已完成历史重放的同 trace 本地终态 |
+| 显式独立 Codex `0.161.0`，`real_codex_cli_ --lib -- --ignored --nocapture` | 4 个用例通过；自动压缩分别验证 local summary 与 remote checkpoint，每种都有 3 次正式入站/上游 WS，工具执行一次 |
+| 显式桌面内置 Codex `0.162.0-alpha.2`，`real_codex_cli_auto_compaction --lib -- --ignored --nocapture` | 1 个用例、两种压缩路径通过；逐轮正式 WS、owner/window/context 变化和单次工具执行均断言 |
+| 强制客户端 HTTP 的隔离反向检查 | CLI 满足原工具/压缩断言后被新增正式 WS 断言拒绝；不再出现纯 HTTP 的假通过 |
+| 前端事件契约、日志详情与错误详情定向测试 | 59 通过；本地失败与原因显示正确，未伪造上游状态或供应商重试，显式上游状态及旧日志行为保留 |
+
+静态检查通过：`pnpm tauri:check`、`pnpm tauri:clippy`（all-targets、warnings as errors）、Rust fmt、前端定向 ESLint/Prettier、`pnpm typecheck`、`pnpm check:spec-links` 与 `git diff --check`。独立只读复核确认，生成准入成功后、创建 lease 前没有 await；准入失败不会登记或释放其他 active generation。
+
+以上未向真实远程供应商发送请求，也未打包或替换正在运行的 AIO；新构建安装前，现有进程不会使用源码修复。Windows/Linux/WSL 实机、企业代理/证书、睡眠唤醒与 UI 手工验收仍未执行。

@@ -3,6 +3,11 @@
 use super::protocol::{self, EventDecoder, EventKind, HistoryDigest, Owner};
 use super::state::{self, Connection, Generation, RecoveryIdentity, RequestState};
 use crate::gateway::proxy::proxy_impl;
+use crate::gateway::proxy::request_end::{
+    emit_request_event_and_enqueue_request_log, RequestCompletion, RequestEndArgs,
+    RequestEndContextArgs, RequestEndDeps,
+};
+use crate::gateway::proxy::GatewayErrorCode;
 use crate::gateway::runtime::GatewayAppState;
 use crate::shared::mutex_ext::MutexExt;
 use axum::body::Body;
@@ -15,7 +20,7 @@ use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(in crate::gateway) async fn dispatch<R>(
     state: GatewayAppState<R>,
@@ -157,7 +162,16 @@ async fn serve<R>(
         }
         let forced =
             crate::gateway::proxy::handler::early_error::extract_forced_provider_id(&headers);
-        let request_state = match prepare_request(connection.clone(), &headers, &body, forced) {
+        let started = Instant::now();
+        let created_at_ms = crate::gateway::util::now_unix_millis() as i64;
+        let prepared =
+            prepare_request(connection.clone(), &headers, &body, forced).and_then(|prepared| {
+                if let state::PreparedRequest::Dispatch(Some(request)) = &prepared {
+                    connection.runtime.begin_generation(request)?;
+                }
+                Ok(prepared)
+            });
+        let request_state = match prepared {
             Ok(state::PreparedRequest::Dispatch(value)) => value,
             Ok(state::PreparedRequest::Failure(failure)) => {
                 let event = crate::gateway::client_error::encode_failure(
@@ -168,27 +182,57 @@ async fn serve<R>(
                 break;
             }
             Err(message) => {
-                let _ = send_event(
-                    &mut socket,
-                    &protocol::error_event("invalid_request", message),
+                let trace_id = crate::gateway::util::new_trace_id();
+                emit_request_event_and_enqueue_request_log(
+                    RequestEndArgs::from_context(RequestEndContextArgs {
+                        deps: RequestEndDeps::new(
+                            &state.app,
+                            &state.db,
+                            &state.log_tx,
+                            &state.plugin_pipeline,
+                            &state.active_requests,
+                        ),
+                        trace_id: &trace_id,
+                        cli_key: "codex",
+                        method: "POST",
+                        path: &path,
+                        observe: true,
+                        query: uri.query(),
+                        excluded_from_stats: false,
+                        duration_ms: started.elapsed().as_millis(),
+                        attempts: &[],
+                        special_settings_json: Some(
+                            serde_json::json!([{
+                                "type":"codex_responses_transport", "scope":"request",
+                                "client_transport":"responses_ws", "failure_class":"local",
+                                "reason_code":"invalid_request", "upstream_sent":false,
+                            }])
+                            .to_string(),
+                        ),
+                        session_id: None,
+                        requested_model: None,
+                        created_at_ms,
+                        created_at: created_at_ms / 1000,
+                    })
+                    .with_completion(RequestCompletion::failure(
+                        400,
+                        Some("local"),
+                        GatewayErrorCode::RequestRejected.as_str(),
+                    ))
+                    .with_request_rejection("invalid_request", message),
                 )
                 .await;
+                let mut event = protocol::error_event("invalid_request", message);
+                event["trace_id"] = serde_json::json!(trace_id);
+                let _ = send_event(&mut socket, &event).await;
                 break;
             }
         };
-        let _lease = GenerationLease(request_state.clone());
+        let _lease = state::GenerationLease(request_state.clone());
         if let Some(request_state) = &request_state {
             // Upgrade headers describe only the first generation; later turns
             // carry their state in each response.create frame.
             headers.remove(protocol::TURN_STATE_HEADER);
-            if connection.runtime.begin_generation(request_state).is_err() {
-                let _ = send_event(
-                    &mut socket,
-                    &protocol::error_event("invalid_request", "Response owner is already active"),
-                )
-                .await;
-                break;
-            }
             let identity = request_state.generation.lock_or_recover().identity.clone();
             if let Some(identity) = identity {
                 if send_event(&mut socket, &protocol::metadata_event(&identity.nonce))
@@ -546,22 +590,6 @@ fn prepare_request(
             upstream_ws: false,
         })),
     })))
-}
-
-struct GenerationLease(Option<RequestState>);
-impl Drop for GenerationLease {
-    fn drop(&mut self) {
-        if let Some(request) = &self.0 {
-            let completed = {
-                let generation = request.generation.lock_or_recover();
-                generation.terminal && !generation.failed
-            };
-            request
-                .connection
-                .runtime
-                .finish_generation(request, completed);
-        }
-    }
 }
 
 #[cfg(test)]

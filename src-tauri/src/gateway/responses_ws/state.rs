@@ -16,6 +16,8 @@ use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore};
 const RECOVERY_TTL: Duration = Duration::from_secs(30);
 const OWNER_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
 const MAX_RECOVERIES: usize = 128;
+// shortcut: retain 128 prior windows per turn; revisit if real turns exceed this compaction count.
+const MAX_PREVIOUS_CONTEXT_WINDOWS: usize = 128;
 const WS_COOLDOWN: Duration = Duration::from_secs(60);
 pub(in crate::gateway) const MAX_CONNECTIONS: usize = 4;
 // ponytail: fixed reservations admit two managed contexts; measure peaks before increasing concurrency.
@@ -183,13 +185,16 @@ impl Runtime {
         }
         let mut records = self.owners.lock_or_recover();
         prune_owners(&mut records);
-        if records.get(owner).is_some_and(|record| {
-            record.active_generation.is_some()
+        if let Some(record) = records.get(owner) {
+            if record.active_generation.is_some()
                 || record.pending.is_some()
                 || record.retired
                 || record.completed.is_none()
-        }) {
-            return Err("Responses generation owner is already in use");
+            {
+                return Err("Responses generation owner is already in use");
+            }
+            // Local compaction opens another client session within the same turn.
+            return Ok(record.nonce.clone());
         }
         if !records.contains_key(owner) && records.len() >= MAX_RECOVERIES {
             let oldest = records
@@ -215,6 +220,7 @@ impl Runtime {
                 retired: false,
                 http_only: false,
                 completed: None,
+                previous_context_windows: HashSet::new(),
                 pending: None,
                 failure: None,
                 expires: Instant::now() + OWNER_IDLE_TTL,
@@ -471,6 +477,59 @@ impl Runtime {
     ) -> Result<Option<Recovered>, &'static str> {
         let mut records = self.owners.lock_or_recover();
         prune_owners(&mut records);
+        if !records.contains_key(owner) {
+            let previous = records
+                .iter()
+                .find(|(previous, record)| {
+                    let later_window = match (
+                        previous.window.rsplit_once(':'),
+                        owner.window.rsplit_once(':'),
+                    ) {
+                        (Some((old_thread, old)), Some((new_thread, new)))
+                            if old_thread == previous.thread && new_thread == owner.thread =>
+                        {
+                            old.parse::<u64>()
+                                .ok()
+                                .zip(new.parse::<u64>().ok())
+                                .is_some_and(|(old, new)| new > old)
+                        }
+                        _ => false,
+                    };
+                    self.enabled()
+                        && record.epoch == self.epoch()
+                        && nonce == Some(record.nonce.as_str())
+                        && previous.session == owner.session
+                        && previous.thread == owner.thread
+                        && (previous.window == owner.window || later_window)
+                        && previous.turn == owner.turn
+                        && previous.context_window != owner.context_window
+                        && !record
+                            .previous_context_windows
+                            .contains(&owner.context_window)
+                        && record.active_generation.is_none()
+                        && record.pending.is_none()
+                        && record.failure.is_none()
+                        && !record.retired
+                        && record.completed.is_some()
+                        && (!client_ws || !record.http_only)
+                })
+                .map(|(previous, _)| previous.clone());
+            if let Some(previous) = previous {
+                if records[&previous].previous_context_windows.len() >= MAX_PREVIOUS_CONTEXT_WINDOWS
+                {
+                    return Err("Responses context window capacity reached");
+                }
+                // Codex keeps its first turn nonce after compaction; this starts new history,
+                // while a pending or failed generation must keep its original recovery budget.
+                let mut record = records.remove(&previous).expect("matched Responses owner");
+                record
+                    .previous_context_windows
+                    .insert(previous.context_window);
+                record.completed = None;
+                records.insert(owner.clone(), record);
+                return Ok(None);
+            }
+        }
         let Some(record) = records.get_mut(owner) else {
             return if nonce.is_some_and(is_local_nonce) {
                 Err("unknown or expired Responses owner nonce")
@@ -662,6 +721,7 @@ struct OwnerRecord {
     retired: bool,
     http_only: bool,
     completed: Option<HistoryDigest>,
+    previous_context_windows: HashSet<String>,
     pending: Option<Pending>,
     failure: Option<KnownFailure>,
     expires: Instant,
@@ -736,6 +796,23 @@ pub(in crate::gateway) struct RequestState {
     pub(in crate::gateway) connection: Arc<Connection>,
     pub(in crate::gateway) generation: Arc<Mutex<Generation>>,
     pub(in crate::gateway) client_ws: bool,
+}
+
+pub(in crate::gateway) struct GenerationLease(pub(in crate::gateway) Option<RequestState>);
+
+impl Drop for GenerationLease {
+    fn drop(&mut self) {
+        if let Some(request) = &self.0 {
+            let completed = {
+                let generation = request.generation.lock_or_recover();
+                generation.terminal && !generation.failed
+            };
+            request
+                .connection
+                .runtime
+                .finish_generation(request, completed);
+        }
+    }
 }
 
 pub(in crate::gateway) struct Generation {
@@ -945,6 +1022,257 @@ mod tests {
     }
 
     #[test]
+    fn completed_generation_can_start_a_compacted_context_without_replaying_old_windows() {
+        let runtime = Arc::new(Runtime::new(true));
+        let nonce = runtime.issue_nonce(&owner()).unwrap();
+        let items = vec![input("first"), input("tool result")];
+        let original = request(&runtime, &nonce, &items, false);
+        runtime.begin_generation(&original).unwrap();
+        runtime.finish_generation(&original, true);
+        assert_eq!(runtime.issue_nonce(&owner()).unwrap(), nonce);
+        let summary = vec![input("compacted history")];
+        let mut compacted_owner = owner();
+        compacted_owner.context_window = "compacted".into();
+        assert!(runtime
+            .claim(
+                &compacted_owner,
+                Some(&nonce),
+                &summary,
+                &HistoryDigest::default()
+            )
+            .unwrap()
+            .is_none());
+        let mut competing_owner = compacted_owner.clone();
+        competing_owner.context_window = "competing-compaction".into();
+        assert!(runtime
+            .claim(
+                &competing_owner,
+                Some(&nonce),
+                &summary,
+                &HistoryDigest::default()
+            )
+            .is_err());
+        let compacted = request(&runtime, &nonce, &summary, false);
+        compacted
+            .generation
+            .lock_or_recover()
+            .identity
+            .as_mut()
+            .unwrap()
+            .owner = compacted_owner.clone();
+        runtime.begin_generation(&compacted).unwrap();
+        runtime.finish_generation(&compacted, true);
+        assert_eq!(runtime.issue_nonce(&compacted_owner).unwrap(), nonce);
+        assert!(runtime
+            .claim(&owner(), Some(&nonce), &items, &HistoryDigest::default())
+            .is_err());
+        assert!(runtime
+            .claim(
+                &compacted_owner,
+                Some(&nonce),
+                &summary,
+                &HistoryDigest::default()
+            )
+            .is_err());
+        let extended = vec![input("compacted history"), input("next tool result")];
+        assert!(runtime
+            .claim(
+                &compacted_owner,
+                Some(&nonce),
+                &extended,
+                &HistoryDigest::default()
+            )
+            .unwrap()
+            .is_none());
+        let mut next_owner = compacted_owner.clone();
+        next_owner.context_window = "compacted-again".into();
+        assert!(runtime
+            .claim(
+                &next_owner,
+                Some(&nonce),
+                &summary,
+                &HistoryDigest::default()
+            )
+            .unwrap()
+            .is_none());
+        assert!(runtime
+            .claim(
+                &compacted_owner,
+                Some(&nonce),
+                &summary,
+                &HistoryDigest::default()
+            )
+            .is_err());
+        assert_eq!(runtime.owners.lock_or_recover().len(), 1);
+    }
+
+    #[test]
+    fn compaction_cannot_reset_unfinished_failed_or_expired_generation_ownership() {
+        for state in [
+            "unstarted",
+            "active",
+            "pending",
+            "cancelled",
+            "unavailable",
+            "expired",
+            "disabled",
+            "http_only",
+        ] {
+            let runtime = Arc::new(Runtime::new(true));
+            let nonce = runtime.issue_nonce(&owner()).unwrap();
+            let items = vec![input("first")];
+            let original = request(&runtime, &nonce, &items, false);
+            if state != "unstarted" {
+                runtime.begin_generation(&original).unwrap();
+            }
+            match state {
+                "pending" => runtime.suspend(&original).unwrap(),
+                "cancelled" => runtime.finish_generation(&original, false),
+                "unavailable" => {
+                    runtime.remember_failure(
+                        &original,
+                        &GatewayFailure {
+                            status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                            trace_id: "failed".into(),
+                            error_code: "GW_ALL_PROVIDERS_UNAVAILABLE".into(),
+                            message: "No available providers".into(),
+                            attempts: vec![],
+                            retry_after_seconds: Some(60),
+                        },
+                    );
+                    runtime.finish_generation(&original, false);
+                }
+                "expired" | "disabled" | "http_only" => {
+                    runtime.finish_generation(&original, true);
+                    match state {
+                        "expired" => {
+                            runtime
+                                .owners
+                                .lock_or_recover()
+                                .get_mut(&owner())
+                                .unwrap()
+                                .expires = Instant::now()
+                        }
+                        "disabled" => runtime.set_enabled(false),
+                        "http_only" => {
+                            runtime
+                                .owners
+                                .lock_or_recover()
+                                .get_mut(&owner())
+                                .unwrap()
+                                .http_only = true
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                _ => {}
+            }
+            let mut compacted_owner = owner();
+            compacted_owner.context_window = "compacted".into();
+            assert!(
+                runtime
+                    .claim(
+                        &compacted_owner,
+                        Some(&nonce),
+                        &[input("summary")],
+                        &HistoryDigest::default()
+                    )
+                    .is_err(),
+                "must preserve {state} generation ownership"
+            );
+        }
+    }
+
+    #[test]
+    fn compaction_window_numbers_advance_only_within_the_same_thread() {
+        let runtime = Arc::new(Runtime::new(true));
+        let mut original_owner = owner();
+        original_owner.window = "thread:2".into();
+        let nonce = runtime.issue_nonce(&original_owner).unwrap();
+        let items = vec![input("first")];
+        let original = request(&runtime, &nonce, &items, false);
+        original
+            .generation
+            .lock_or_recover()
+            .identity
+            .as_mut()
+            .unwrap()
+            .owner = original_owner.clone();
+        runtime.begin_generation(&original).unwrap();
+        runtime.finish_generation(&original, true);
+        let mut next_owner = original_owner;
+        next_owner.context_window = "compacted".into();
+        for window in [
+            "thread:1",
+            "other:3",
+            "thread:invalid",
+            "other-window",
+            "thread:18446744073709551616",
+        ] {
+            next_owner.window = window.into();
+            assert!(runtime
+                .claim(&next_owner, Some(&nonce), &items, &HistoryDigest::default())
+                .is_err());
+        }
+        next_owner.window = "thread:3".into();
+        assert!(runtime
+            .claim(&next_owner, Some(&nonce), &items, &HistoryDigest::default())
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn compaction_requires_the_same_turn_nonce_and_bounds_window_replay_metadata() {
+        let runtime = Arc::new(Runtime::new(true));
+        let nonce = runtime.issue_nonce(&owner()).unwrap();
+        let items = vec![input("first")];
+        let original = request(&runtime, &nonce, &items, false);
+        runtime.begin_generation(&original).unwrap();
+        runtime.finish_generation(&original, true);
+        let mut compacted_owner = owner();
+        compacted_owner.context_window = "compacted".into();
+        for field in ["session", "thread", "window", "turn"] {
+            let mut other = compacted_owner.clone();
+            match field {
+                "session" => other.session = "other".into(),
+                "thread" => other.thread = "other".into(),
+                "window" => other.window = "other".into(),
+                "turn" => other.turn = "other".into(),
+                _ => unreachable!(),
+            }
+            assert!(runtime
+                .claim(&other, Some(&nonce), &items, &HistoryDigest::default())
+                .is_err());
+        }
+        assert!(runtime
+            .claim(
+                &compacted_owner,
+                Some("aio-ws-other"),
+                &items,
+                &HistoryDigest::default()
+            )
+            .is_err());
+        runtime
+            .owners
+            .lock_or_recover()
+            .get_mut(&owner())
+            .unwrap()
+            .previous_context_windows = (0..MAX_PREVIOUS_CONTEXT_WINDOWS)
+            .map(|i| format!("old-{i}"))
+            .collect();
+        assert!(matches!(
+            runtime.claim(
+                &compacted_owner,
+                Some(&nonce),
+                &items,
+                &HistoryDigest::default()
+            ),
+            Err("Responses context window capacity reached")
+        ));
+        assert!(runtime.owners.lock_or_recover().contains_key(&owner()));
+    }
+
+    #[test]
     fn known_unavailability_matches_delta_or_full_history_and_never_claims_a_budget() {
         let runtime = Arc::new(Runtime::new(true));
         let nonce = runtime.issue_nonce(&owner()).unwrap();
@@ -1151,7 +1479,11 @@ mod tests {
     fn recovery_preserves_constraints_and_attempt_deadline() {
         let runtime = Arc::new(Runtime::new(true));
         let nonce = runtime.issue_nonce(&owner()).unwrap();
-        let items = vec![input("synthetic")];
+        let items = vec![
+            input("synthetic"),
+            json!({"type":"compaction","id":"cmp_checkpoint","encrypted_content":"synthetic-checkpoint"}),
+            json!({"type":"compaction_trigger"}),
+        ];
         let request = request(&runtime, &nonce, &items, false);
         let deadline = Instant::now() + Duration::from_secs(5);
         let properties = request_properties(&json!({"model":"model-a"}), Some(3));
@@ -1166,6 +1498,11 @@ mod tests {
         }
         runtime.begin_generation(&request).unwrap();
         runtime.suspend(&request).unwrap();
+        let mut changed_checkpoint = items.clone();
+        changed_checkpoint[1]["encrypted_content"] = json!("changed-checkpoint");
+        assert!(runtime
+            .claim(&owner(), Some(&nonce), &changed_checkpoint, &properties)
+            .is_err());
         assert!(runtime
             .claim(
                 &owner(),

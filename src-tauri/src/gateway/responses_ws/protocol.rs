@@ -245,6 +245,8 @@ fn canonical_history_item(item: &Value) -> Option<Value> {
         "custom_tool_call" => &["call_id", "name", "namespace", "input", "status"],
         "custom_tool_call_output" => &["call_id", "name", "output"],
         "reasoning" => &["summary", "content", "encrypted_content", "status"],
+        "compaction" => &["encrypted_content"],
+        "compaction_trigger" => &[],
         "additional_tools" => &["role", "tools"],
         _ => return None,
     };
@@ -383,6 +385,12 @@ fn canonical_history_item(item: &Value) -> Option<Value> {
             object.entry("encrypted_content").or_insert(Value::Null);
             object.remove("status");
         }
+        "compaction" => {
+            if !string("encrypted_content") {
+                return None;
+            }
+        }
+        "compaction_trigger" => {}
         "additional_tools" => {
             if !string("role") || !object.get("tools")?.is_array() {
                 return None;
@@ -566,6 +574,64 @@ mod tests {
             HistoryDigest::from_items(&[legacy]),
             HistoryDigest::from_items(&[missing])
         );
+    }
+
+    #[test]
+    fn compaction_history_matches_full_tool_replay_without_erasing_checkpoint() {
+        let trigger = serde_json::json!({"type":"compaction_trigger"});
+        let checkpoint = serde_json::json!({"type":"compaction","id":"cmp_probe","encrypted_content":"synthetic-checkpoint","internal_chat_message_metadata_passthrough":{"turn_id":"internal"}});
+        let mut replayed_checkpoint = checkpoint.clone();
+        replayed_checkpoint
+            .as_object_mut()
+            .unwrap()
+            .remove("internal_chat_message_metadata_passthrough");
+        let mut history = HistoryDigest::from_items(&[trigger.clone(), checkpoint]);
+        assert!(history.is_recoverable());
+        assert_eq!(
+            history,
+            HistoryDigest::from_items(&[trigger.clone(), replayed_checkpoint.clone()])
+        );
+        for field in ["id", "encrypted_content"] {
+            let mut changed = replayed_checkpoint.clone();
+            changed[field] = Value::String("changed_value".into());
+            assert_ne!(
+                history,
+                HistoryDigest::from_items(&[trigger.clone(), changed])
+            );
+        }
+        let call = serde_json::json!({"type":"function_call","name":"exec","call_id":"call_compacted","arguments":"{}"});
+        let output = serde_json::json!({"type":"function_call_output","call_id":"call_compacted","output":"ok"});
+        history.append(std::slice::from_ref(&call));
+        assert!(history.is_strict_prefix_of(&[trigger, replayed_checkpoint, call, output]));
+        assert_eq!(
+            HistoryDigest::from_items(&[
+                serde_json::json!({"type":"compaction","encrypted_content":"synthetic-checkpoint"})
+            ]),
+            HistoryDigest::from_items(&[
+                serde_json::json!({"type":"compaction","id":null,"encrypted_content":"synthetic-checkpoint","internal_chat_message_metadata_passthrough":null})
+            ])
+        );
+    }
+
+    #[test]
+    fn malformed_compaction_history_cannot_be_matched_for_recovery() {
+        for item in [
+            serde_json::json!({"type":"compaction"}),
+            serde_json::json!({"type":"compaction","encrypted_content":null}),
+            serde_json::json!({"type":"compaction","encrypted_content":42}),
+            serde_json::json!({"type":"compaction","encrypted_content":[]}),
+            serde_json::json!({"type":"compaction","encrypted_content":"synthetic-checkpoint","id":42}),
+            serde_json::json!({"type":"compaction","encrypted_content":"synthetic-checkpoint","future_semantic_state":"value"}),
+            serde_json::json!({"type":"compaction","encrypted_content":"synthetic-checkpoint","internal_chat_message_metadata_passthrough":"invalid"}),
+            serde_json::json!({"type":"compaction_trigger","encrypted_content":"synthetic-checkpoint"}),
+            serde_json::json!({"type":"compaction_trigger","status":"completed"}),
+            serde_json::json!({"type":"compaction_trigger","internal_chat_message_metadata_passthrough":[]}),
+        ] {
+            assert!(
+                !HistoryDigest::from_items(std::slice::from_ref(&item)).is_recoverable(),
+                "unexpected recoverable item: {item}"
+            );
+        }
     }
 
     #[test]

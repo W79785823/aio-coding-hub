@@ -51,6 +51,42 @@ describe("gateway event payload contract (shared fixtures)", () => {
     expect(event?.attempts.every((attempt) => attempt.outcome === "skipped")).toBe(true);
   });
 
+  it("accepts local Responses ownership rejection without inventing provider attempts", () => {
+    const event = normalizeGatewayRequestEvent({
+      ...requestFixture,
+      trace_id: "trace-nonce-rejected",
+      cli_key: "codex",
+      path: "/v1/responses",
+      status: 400,
+      error_category: "local",
+      error_code: "GW_REQUEST_REJECTED",
+      duration_ms: 1,
+      ttfb_ms: null,
+      attempts: [],
+      input_tokens: null,
+      output_tokens: null,
+      total_tokens: null,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+      cache_creation_5m_input_tokens: null,
+      cache_creation_1h_input_tokens: null,
+      effective_input_tokens: null,
+      claude_model_mapping: null,
+    });
+
+    expect(event).toMatchObject({
+      trace_id: "trace-nonce-rejected",
+      cli_key: "codex",
+      status: 400,
+      error_category: "local",
+      error_code: "GW_REQUEST_REJECTED",
+      ttfb_ms: null,
+      attempts: [],
+      input_tokens: null,
+      output_tokens: null,
+    });
+  });
+
   it("accepts null forms of the optional gateway:request fields", () => {
     // The emitter serializes Option::None as explicit null (no
     // skip_serializing_if — guarded by crossLayerContracts.test.ts); the

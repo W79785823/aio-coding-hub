@@ -34,7 +34,7 @@ describe("components/home/requestLogErrorDetails", () => {
     expect(resolveRequestLogErrorObservation(createRequestLogDetail())).toBeNull();
   });
 
-  it("parses structured error details and reason-derived fields", () => {
+  it.each(["upstream", "local"])("parses explicit error details (%s)", (errorCategory) => {
     const observation = resolveRequestLogErrorObservation(
       createRequestLogDetail({
         status: 502,
@@ -46,7 +46,7 @@ describe("components/home/requestLogErrorDetails", () => {
           circuit_state_after: "OPEN",
           circuit_state_before: "CLOSED",
           decision: "skip",
-          error_category: "upstream",
+          error_category: errorCategory,
           error_code: "GW_PROVIDER_CIRCUIT_OPEN",
           outcome: "failure",
           provider_id: 42,
@@ -70,7 +70,7 @@ describe("components/home/requestLogErrorDetails", () => {
         circuitStateBefore: "CLOSED",
         decision: "skip",
         displayErrorCode: "GW_PROVIDER_CIRCUIT_OPEN",
-        errorCategory: "upstream",
+        errorCategory,
         gatewayErrorCode: "GW_UPSTREAM_5XX",
         matchedRule: "provider_circuit",
         outcome: "failure",

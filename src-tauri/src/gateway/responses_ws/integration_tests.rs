@@ -538,6 +538,103 @@ async fn terminal_log(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn ws_local_nonce_rejections_log_the_same_trace_without_calling_upstream() {
+    for case in ["forged", "expired", "completed-replay"] {
+        let fixture = Fixture::new(true).await;
+        let (stub, upstream) = Stub::start("A", Behavior::Complete).await;
+        let provider = fixture.provider("A", &upstream.origin(), true);
+        let (gateway, mut logs) = fixture.start().await;
+        let session = "local-rejection";
+        let Message::Text(create) = create_message(Some(session)) else {
+            unreachable!()
+        };
+        let mut body: Value = serde_json::from_str(&create).unwrap();
+        body["input"][0]["type"] = json!("message");
+        body["input"][0]["content"][0]["text"] = json!("private-prompt-must-not-be-logged");
+        let owner = protocol::Owner::parse(
+            body["client_metadata"]["x-codex-turn-metadata"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let (nonce, reason) = if case == "completed-replay" {
+            let mut first = connect(&gateway, session).await.unwrap();
+            first.send(Message::Text(body.to_string())).await.unwrap();
+            let nonce = recv_until(&mut first, "response.metadata").await["headers"]
+                [protocol::TURN_STATE_HEADER]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            recv_until(&mut first, "response.completed").await;
+            assert_eq!(terminal_log(&mut logs).await.status, Some(200));
+            first.close(None).await.unwrap();
+            drop(first);
+            stub.calls.lock().unwrap().clear();
+            (
+                nonce,
+                "Responses generation does not extend the completed history",
+            )
+        } else {
+            let nonce = fixture.runtime.issue_nonce(&owner).unwrap();
+            let reason = if case == "expired" {
+                fixture.runtime.invalidate();
+                body["client_metadata"][protocol::TURN_STATE_HEADER] = json!(nonce);
+                "unknown or expired Responses owner nonce"
+            } else {
+                body["client_metadata"][protocol::TURN_STATE_HEADER] = json!("aio-ws-forged");
+                "context recovery ownership mismatch"
+            };
+            (nonce, reason)
+        };
+        let mut socket = connect(&gateway, session).await.unwrap();
+        socket.send(Message::Text(body.to_string())).await.unwrap();
+        let error = recv_until(&mut socket, "error").await;
+        assert_eq!(error["status"], 400);
+        assert_eq!(error["error"]["code"], "invalid_request");
+        assert_eq!(error["error"]["message"], reason);
+        let trace = error["trace_id"].as_str().expect("local rejection trace");
+        let log = terminal_log(&mut logs).await;
+        assert_eq!(log.trace_id, trace);
+        assert_eq!(log.status, Some(400));
+        assert_eq!(log.error_code.as_deref(), Some("GW_REQUEST_REJECTED"));
+        assert_eq!(log.method, "POST");
+        assert_eq!(log.path, "/v1/responses");
+        assert_eq!(
+            serde_json::from_str::<Value>(&log.attempts_json).unwrap(),
+            json!([])
+        );
+        let details = log.error_details_json.as_deref().unwrap();
+        let parsed: Value = serde_json::from_str(details).unwrap();
+        assert_eq!(parsed["error_category"], "local");
+        assert_eq!(parsed["reason_code"], "invalid_request");
+        assert_eq!(parsed["reason"], reason);
+        let settings = log.special_settings_json.as_deref().unwrap();
+        let parsed: Vec<Value> = serde_json::from_str(settings).unwrap();
+        assert!(parsed
+            .iter()
+            .any(|setting| setting["type"] == "codex_responses_transport"
+                && setting["client_transport"] == "responses_ws"
+                && setting["failure_class"] == "local"
+                && setting["upstream_sent"] == false));
+        for encoded in [details, settings] {
+            assert!(!encoded.contains(&nonce));
+            assert!(!encoded.contains("aio-ws-forged"));
+            assert!(!encoded.contains("private-prompt-must-not-be-logged"));
+        }
+        assert!(stub.transports().is_empty());
+        assert!(fixture.active.snapshot().is_empty());
+        assert_eq!(
+            fixture
+                .circuit
+                .snapshot(provider, crate::shared::time::now_unix_seconds())
+                .failure_count,
+            0
+        );
+        assert!(logs.try_recv().is_err());
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn ordinary_http_stream_remains_http_when_provider_supports_ws() {
     let fixture = Fixture::new(true).await;
     let (stub, upstream) = Stub::start("A", Behavior::Complete).await;
@@ -1167,7 +1264,7 @@ async fn run_cli_with_timeout(
     output
 }
 
-/// Explicit opt-in: AIO_CODEX_WS_TEST_CLI=/absolute/path/to/codex pnpm tauri:test -- real_codex_cli_rebuilds_context --ignored --nocapture
+/// Explicit opt-in: AIO_CODEX_WS_TEST_CLI=/absolute/path/to/codex pnpm tauri:test -- real_codex_cli_rebuilds_context --lib -- --ignored --nocapture
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "requires an explicitly selected real Codex CLI executable"]
 async fn real_codex_cli_rebuilds_context_then_fails_over_without_repeating_tool() {
@@ -1320,6 +1417,59 @@ async fn real_codex_cli_rebuilds_context_then_fails_over_without_repeating_tool(
 struct CliTwoTurnStub {
     connections: Arc<std::sync::atomic::AtomicUsize>,
     calls: Arc<Mutex<Vec<Value>>>,
+    auto_compact: bool,
+}
+
+impl CliTwoTurnStub {
+    fn response(&self, body: Value) -> Vec<Value> {
+        let generation = {
+            let mut calls = self.calls.lock().unwrap();
+            calls.push(body.clone());
+            calls
+                .iter()
+                .filter(|body| body["generate"] != false)
+                .count()
+        };
+        if body["generate"] == false {
+            vec![
+                json!({"type":"response.completed","response":{"id":"warm","status":"completed","output":[]}}),
+            ]
+        } else if self.auto_compact
+            && body
+                .pointer("/client_metadata/x-codex-turn-metadata")
+                .and_then(Value::as_str)
+                .and_then(|metadata| serde_json::from_str::<Value>(metadata).ok())
+                .is_some_and(|metadata| metadata["request_kind"] == "compaction")
+        {
+            if body["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["type"] == "compaction_trigger")
+            {
+                let item = json!({"type":"compaction","id":"cmp_probe","encrypted_content":"synthetic-checkpoint"});
+                vec![
+                    json!({"type":"response.output_item.done","output_index":0,"item":item}),
+                    json!({"type":"response.completed","response":{"id":"resp-compaction","status":"completed","output":[item],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}),
+                ]
+            } else {
+                events("summary")
+            }
+        } else if generation == if self.auto_compact { 1 } else { 2 } {
+            let item = cli_tool_item(&body);
+            let mut output = vec![
+                json!({"type":"response.output_item.done","item":item}),
+                json!({"type":"response.completed","response":{"id":"resp-tool","status":"completed","output":[item]}}),
+            ];
+            if self.auto_compact {
+                output[1]["response"]["usage"] =
+                    json!({"input_tokens":200000,"output_tokens":10,"total_tokens":200010});
+            }
+            output
+        } else {
+            events(if generation == 1 { "first" } else { "final" })
+        }
+    }
 }
 
 async fn cli_two_turn_ws(
@@ -1328,30 +1478,36 @@ async fn cli_two_turn_ws(
 ) -> Response {
     stub.connections
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    upgrade.on_upgrade(move |mut socket| async move {
-        while let Some(Ok(axum::extract::ws::Message::Text(text))) = socket.recv().await {
-            let body: Value = serde_json::from_str(&text).unwrap();
-            let generation = {
-                let mut calls = stub.calls.lock().unwrap();
-                calls.push(body.clone());
-                calls.iter().filter(|body| body["generate"] != false).count()
-            };
-            let output = if body["generate"] == false {
-                vec![json!({"type":"response.completed","response":{"id":"warm","status":"completed","output":[]}})]
-            } else if generation == 2 {
-                let item = cli_tool_item(&body);
-                vec![
-                    json!({"type":"response.output_item.done","item":item}),
-                    json!({"type":"response.completed","response":{"id":"resp-tool","status":"completed","output":[item]}}),
-                ]
-            } else {
-                events(if generation == 1 { "first" } else { "final" })
-            };
-            for event in output {
-                if socket.send(axum::extract::ws::Message::Text(event.to_string())).await.is_err() { return; }
+    upgrade
+        .on_upgrade(move |mut socket| async move {
+            while let Some(Ok(axum::extract::ws::Message::Text(text))) = socket.recv().await {
+                let body: Value = serde_json::from_str(&text).unwrap();
+                for event in stub.response(body) {
+                    if socket
+                        .send(axum::extract::ws::Message::Text(event.to_string()))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
             }
-        }
-    }).into_response()
+        })
+        .into_response()
+}
+
+async fn cli_two_turn_http(
+    State(stub): State<CliTwoTurnStub>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    assert!(!headers.contains_key(protocol::TURN_STATE_HEADER));
+    let body: Vec<u8> = stub
+        .response(body)
+        .iter()
+        .flat_map(|event| protocol::sse_bytes(event).to_vec())
+        .collect();
+    ([(header::CONTENT_TYPE, "text/event-stream")], body).into_response()
 }
 
 async fn cli_message_until(
@@ -1506,6 +1662,292 @@ async fn recv_until(
     })
     .await
     .expect("expected downstream event")
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn completed_turn_compaction_starts_fresh_generation_on_ws_and_http() {
+    for (http, remote) in [(false, false), (true, false), (false, true), (true, true)] {
+        let fixture = Fixture::new(true).await;
+        let stub = CliTwoTurnStub::default();
+        let upstream = Server::start(
+            Router::new()
+                .route(
+                    "/v1/responses",
+                    get(cli_two_turn_ws).post(cli_two_turn_http),
+                )
+                .with_state(stub.clone()),
+        )
+        .await;
+        fixture.provider("A", &upstream.origin(), true);
+        let (gateway, mut logs) = fixture.start().await;
+        let session = "completed-compaction";
+        let mut socket = connect(&gateway, session).await.unwrap();
+        let Message::Text(create) = create_message(Some(session)) else {
+            unreachable!()
+        };
+        let mut body: Value = serde_json::from_str(&create).unwrap();
+        body["input"] = json!([
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"first request"}]},
+            {"type":"message","role":"assistant","content":[{"type":"output_text","text":"first answer"}]},
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"more context"}]}
+        ]);
+        body["tools"] =
+            json!([{"type":"function","name":"shell_command","parameters":{"type":"object"}}]);
+        socket.send(Message::Text(body.to_string())).await.unwrap();
+        let nonce = recv_until(&mut socket, "response.metadata").await["headers"]
+            [protocol::TURN_STATE_HEADER]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        recv_until(&mut socket, "response.completed").await;
+        assert_eq!(terminal_log(&mut logs).await.status, Some(200));
+        if http {
+            socket.close(None).await.unwrap();
+            body.as_object_mut().unwrap().remove("type");
+            body["stream"] = json!(true);
+        }
+        body["client_metadata"][protocol::TURN_STATE_HEADER] = json!(nonce);
+        let tool_output =
+            json!({"type":"function_call_output","call_id":"router_tool","output":"done"});
+        for generation in 0..3 {
+            if generation == 1 {
+                body["input"] = if http {
+                    let mut history = body["input"].as_array().unwrap().clone();
+                    history.extend([cli_tool_item(&body), tool_output.clone()]);
+                    json!(history)
+                } else {
+                    body["previous_response_id"] = json!("resp-tool");
+                    json!([tool_output])
+                };
+            } else {
+                body.as_object_mut().unwrap().remove("previous_response_id");
+                body["input"] = json!([{"type":"message","role":"user","content":[{"type":"input_text","text":"compacted summary"}]}]);
+                if remote {
+                    body["input"].as_array_mut().unwrap().push(json!({
+                        "type":"compaction", "id":format!("cmp_{generation}"),
+                        "encrypted_content":format!("synthetic-checkpoint-{generation}")
+                    }));
+                }
+                let mut metadata: Value = serde_json::from_str(
+                    body["client_metadata"]["x-codex-turn-metadata"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                metadata["context_window_id"] = json!(format!("compacted-{generation}"));
+                body["client_metadata"]["x-codex-turn-metadata"] = json!(metadata.to_string());
+            }
+            if http {
+                let response = reqwest::Client::new()
+                    .post(format!("{}/v1/responses", gateway.origin()))
+                    .header(protocol::TURN_STATE_HEADER, &nonce)
+                    .header("session-id", session)
+                    .json(&body)
+                    .send()
+                    .await
+                    .unwrap();
+                let status = response.status();
+                let response_body = response.text().await.unwrap();
+                assert_eq!(
+                    status,
+                    StatusCode::OK,
+                    "generation {generation}: {response_body}"
+                );
+                assert!(response_body.contains("response.completed"));
+            } else {
+                socket.send(Message::Text(body.to_string())).await.unwrap();
+                let response = recv_until(&mut socket, "response.completed").await;
+                assert_eq!(
+                    response["response"]["id"],
+                    if generation == 0 {
+                        "resp-tool"
+                    } else {
+                        "resp-final"
+                    }
+                );
+            }
+            let log = terminal_log(&mut logs).await;
+            assert_eq!(log.status, Some(200));
+            let attempts: Vec<Value> = serde_json::from_str(&log.attempts_json).unwrap();
+            assert_eq!(
+                attempts.len(),
+                1,
+                "each generation needs a fresh attempt budget"
+            );
+            let settings: Vec<Value> =
+                serde_json::from_str(log.special_settings_json.as_deref().unwrap()).unwrap();
+            assert!(settings
+                .iter()
+                .filter(|setting| setting["type"] == "codex_responses_transport")
+                .all(|setting| setting["recovery_from_trace_id"].is_null()));
+        }
+        let calls = stub.calls.lock().unwrap();
+        assert_eq!(calls.len(), 4);
+        let compacted_items = if remote { 2 } else { 1 };
+        assert_eq!(calls[1]["input"].as_array().unwrap().len(), compacted_items);
+        assert_eq!(calls[3]["input"].as_array().unwrap().len(), compacted_items);
+        if remote && http {
+            assert_eq!(calls[2]["input"][1], calls[1]["input"][1]);
+            assert_eq!(calls[2]["input"].as_array().unwrap().len(), 4);
+        }
+        assert!(calls.iter().all(|body| body
+            .pointer("/client_metadata/x-codex-turn-state")
+            .is_none()));
+        assert_eq!(
+            stub.connections.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        if !http {
+            socket.close(None).await.unwrap();
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires an explicitly selected real Codex CLI executable"]
+async fn real_codex_cli_auto_compaction_preserves_the_turn_nonce_without_repeating_tool() {
+    let cli_path = std::path::PathBuf::from(
+        std::env::var_os("AIO_CODEX_WS_TEST_CLI").expect("set absolute AIO_CODEX_WS_TEST_CLI"),
+    );
+    assert!(cli_path.is_absolute() && cli_path.is_file());
+    for remote in [false, true] {
+        let fixture = Fixture::new(true).await;
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("work")).unwrap();
+        std::fs::create_dir(root.path().join("codex")).unwrap();
+        let stub = CliTwoTurnStub {
+            auto_compact: true,
+            ..Default::default()
+        };
+        let upstream = Server::start(
+            Router::new()
+                .route(
+                    "/v1/responses",
+                    get(cli_two_turn_ws).post(cli_two_turn_http),
+                )
+                .with_state(stub.clone()),
+        )
+        .await;
+        fixture.provider("A", &upstream.origin(), true);
+        let (gateway, mut logs) = fixture.start().await;
+        let mut config = cli_test_config(&gateway.origin());
+        if remote {
+            config = config.replace("name = \"Local AIO router probe\"", "name = \"OpenAI\"");
+        }
+        std::fs::write(
+        root.path().join("codex/config.toml"),
+        format!("model_auto_compact_token_limit = 20000\nmodel_auto_compact_token_limit_scope = \"total\"\nmodel_post_turn_compact_threshold_percent = 0\n{config}"),
+    ).unwrap();
+        let output = run_cli(isolated_cli_command(&cli_path, root.path()).args([
+        "exec", "--skip-git-repo-check", "--ephemeral", "--ignore-rules", "--json", "--color", "never", "--cd",
+    ]).arg(root.path().join("work")).arg("Run the local protocol probe, execute the requested shell tool once, then finish after compacting context.")).await;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "CLI failed: {}\n{stdout}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .any(|event| event["type"] == "turn.completed"),
+            "CLI turn did not complete: {stdout}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("work/probe-count.txt"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        let calls = stub.calls.lock().unwrap();
+        let formal_calls: Vec<&Value> = calls
+            .iter()
+            .filter(|body| body["generate"] != false)
+            .collect();
+        let metadata: Vec<Value> = formal_calls
+            .iter()
+            .map(|body| {
+                serde_json::from_str(
+                    body["client_metadata"]["x-codex-turn-metadata"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap()
+            })
+            .collect();
+        assert_eq!(
+            metadata.len(),
+            3,
+            "one tool request, one compaction, one continuation: {metadata:?}"
+        );
+        assert_eq!(metadata[1]["request_kind"], "compaction");
+        for field in ["session_id", "thread_id", "turn_id"] {
+            assert_eq!(metadata[0][field], metadata[1][field]);
+            assert_eq!(metadata[0][field], metadata[2][field]);
+        }
+        for field in ["window_id", "context_window_id"] {
+            assert_eq!(metadata[0][field], metadata[1][field]);
+            assert_ne!(metadata[0][field], metadata[2][field]);
+        }
+        let contains_compaction = |body: &Value, kind: &str| {
+            body["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["type"] == kind)
+        };
+        assert_eq!(
+            contains_compaction(formal_calls[1], "compaction_trigger"),
+            remote
+        );
+        assert_eq!(contains_compaction(formal_calls[2], "compaction"), remote);
+        if remote {
+            assert!(formal_calls[2]["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["type"] == "compaction"
+                    && item["encrypted_content"] == "synthetic-checkpoint"));
+        }
+        assert!(calls.iter().all(|body| body
+            .pointer("/client_metadata/x-codex-turn-state")
+            .is_none()));
+        drop(calls);
+        for generation in 0..3 {
+            let log = terminal_log(&mut logs).await;
+            assert_eq!(log.status, Some(200));
+            let settings: Vec<Value> =
+                serde_json::from_str(log.special_settings_json.as_deref().unwrap()).unwrap();
+            assert!(
+                settings
+                    .iter()
+                    .any(|setting| setting["type"] == "codex_responses_transport"
+                        && setting["scope"] == "request"
+                        && setting["client_transport"] == "responses_ws"),
+                "formal generation {generation} must enter over WS: {settings:?}"
+            );
+            let selected: Vec<_> = settings
+                .iter()
+                .filter(|setting| {
+                    setting["type"] == "codex_responses_transport"
+                        && setting["scope"] == "attempt"
+                        && setting["transport_action"] == "selected"
+                })
+                .collect();
+            assert_eq!(
+                selected.len(),
+                1,
+                "formal generation {generation}: {settings:?}"
+            );
+            assert_eq!(selected[0]["upstream_transport"], "responses_ws");
+            assert!(selected[0]["failure_class"].is_null());
+        }
+        assert!(logs.try_recv().is_err());
+        println!("real CLI → AIO WS → {} automatic compaction → completed; formal WS requests=3, tool executions=1",
+        if remote { "remote checkpoint" } else { "local summary" });
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

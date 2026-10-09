@@ -405,16 +405,18 @@ Codex `rust-v0.156.0`：`map_wrapped_websocket_error_event` 把 `previous_respon
 
 关联必须区分 `cli_key + stable_session_id + turn_id + 同一 turn 内的逻辑生成`，并复核模型、强制供应商/模板约束。一个 turn 的工具循环可有多次 create，turn_id 本身不足。M0 必须找到跨重试稳定的生成级标识，或以真实客户端保证证明同样严格的关联方式；服务端自增序号不能被当作客户端已经支持的字段。找不到时阻断恢复主实现。字段缺失或匹配有歧义不得猜测，不能仅依赖 prompt hash、`previous_response_id`（重发时会消失）或 SessionIdCache 临时指纹。
 
-恢复关联方式为：AIO 签发的 turn-state 随机 nonce + 下述 owner + 完整历史逐项累计摘要/条目数 + 请求属性摘要 + 原子认领；它首先在 `0.156.0` 上验证，运行时按这些条件判断而非按版本判断。nonce 标识客户端当前 ModelClientSession/turn 的归属，不伪称客户端 generation ID；同一 nonce 下每次生成仍由严格增长的输入历史及单一 active/pending 状态区分。普通 WS 传输与跨连接恢复资格分开：`Generation.identity` 使用 `Option<RecoveryIdentity>` 仅将 owner/nonce 设为可选；缺少恢复元数据的合法请求仍保留 `RequestState`、语义提交门控和原尝试预算，但不能建立可跨连接认领的恢复资格。
+恢复关联方式为：AIO 签发的 turn-state 随机 nonce + 下述 owner + 完整历史逐项累计摘要/条目数 + 请求属性摘要 + 原子认领；它首先在 `0.156.0` 上验证，运行时按这些条件判断而非按版本判断。nonce 标识客户端当前 turn 的归属，不伪称客户端 generation ID；同一上下文窗口内每次生成仍由严格增长的输入历史及单一 active/pending 状态区分。普通 WS 传输与跨连接恢复资格分开：`Generation.identity` 使用 `Option<RecoveryIdentity>` 仅将 owner/nonce 设为可选；缺少恢复元数据的合法请求仍保留 `RequestState`、语义提交门控和原尝试预算，但不能建立可跨连接认领的恢复资格。
 
 - 正常 continuation 与失败恢复分开校验：同一 socket 的 `previous_response_id` 必须匹配该连接记录的响应及 provider/账号/上游连接上下文；有完整 owner 时再校验 session/thread/window/context-window，一致时允许跨用户 turn，新 turn 签发新 nonce。缺少恢复元数据的普通连接仅在本 socket 内续接，不建立跨连接恢复归属。pending 恢复仍要求包含 turn 的完整 owner 与 nonce 一致，不因允许普通请求或跨 turn 对话而放宽恢复归属。
 - 具备受控恢复资格的 WS create 从 `client_metadata["x-codex-turn-metadata"]` 解析 `session_id/thread_id/window_id/context_window_id/turn_id`；不使用可能属于预热、turn 为空的握手快照。HTTP 重发从对应请求头解析。恢复字段缺失不能被当作普通 WS 协议错误；已有本地恢复 nonce 错误或认领不匹配时，仍必须拒绝，不得绕过原预算。
 - 为启用受控恢复的生成发送正确的 `response.metadata`，其 `headers["x-codex-turn-state"]` 携带 AIO nonce。`codex.response.metadata` 是不同事件，不会写入目标客户端的 turn-state。
 - 实际回传位置：WS create 的 `client_metadata["x-codex-turn-state"]`、HTTP 请求的同名 header；重连 Upgrade 也可能携带。header/body 任一携带本地 nonce 时，两个位置若同时存在必须一致，不得用缺少 owner 绕过校验。首个正式生成接受后清除 Upgrade header 的固定 nonce，后续逐帧处理，避免沿用旧 turn。
 - 归属事件在首个正式生成中、任何上游 turn-state 或恢复错误之前发出；预热不消耗正式 turn 的归属。上游 turn-state 单独保存和注入，AIO nonce 不转发给供应商，也不公开记录；不得泄露或覆盖账号路由状态。
-- 同一 socket 已持有当前 owner 的 nonce 时，后续 create 可以不回传；它仍使用原 nonce，完整 input 必须严格扩展已完成的历史前缀。跨连接恢复必须显式回传 nonce，不能凭 socket 之外的推测认领。
-- 未知历史字段不阻断首个普通请求，或同 socket 携带有效 `previous_response_id` 的续接；同一 turn 丢弃引用并改发完整 input 属于历史重建，必须能验证完整历史及其严格增长。投影无法证明时明确失败；普通协议准入不承诺任意历史重放兼容，也不因此扩展通用历史框架。
+- 同一 socket 已持有当前 owner 的 nonce 时，后续 create 可以不回传；它仍使用原 nonce，同一上下文窗口内的完整 input 必须严格扩展已完成的历史前缀。跨连接恢复必须显式回传 nonce，不能凭 socket 之外的推测认领。
+- 自动压缩可以在同一 turn 内切换上下文并发送缩短后的完整 input。仅当原记录已成功完成、无 active/pending/失败状态、未退休且 nonce/epoch/session/thread/turn 一致时，原子迁移到未使用过的新 `context_window_id`；`window_id` 须相同，或为同 thread 的 `<thread>:<u64>` 且编号严格增加。迁移沿用 nonce，清空旧历史摘要，作为新生成领取预算，不标记为失败恢复；失败或 pending 生成不得借换窗口重置预算。同 owner 的独立压缩 client session 再次请求 nonce 时复用完成记录的原值，不覆盖状态。每个 owner 最多保留 128 个旧上下文标识以拒绝重放，不保存历史正文；达到上限明确拒绝。HTTP 续接与 WS 共用生成收尾规则，成功终态释放下一轮资格，取消/失败不按成功完成处理。
+- 未知历史字段不阻断首个普通请求，或同 socket 携带有效 `previous_response_id` 的续接；同一上下文窗口内丢弃引用并改发完整 input 属于历史重建，必须能验证完整历史及其严格增长。投影无法证明时明确失败；普通协议准入不承诺任意历史重放兼容，也不因此扩展通用历史框架。
 - 摘要基于客户端边界：入站 body 插件修改前的 input；出站 fixer/chunk 插件处理后、实际发送的 output items。M0 的 5/7 项工具链已验证；其他 item 必须按目标 CLI 规范化规则测试。未知/不一致投影拒绝恢复，不删除语义字段凑匹配。
+- 已知 `compaction` checkpoint 保留语义 ID 和 `encrypted_content` 原值，`compaction_trigger` 按无语义载荷的官方类型校验；仅规范化既有规则允许省略的 ID/内部 metadata。远程 checkpoint 后的完整 HTTP 工具续接和未提交恢复仍核对严格历史前缀、请求约束与原预算；未知字段与畸形 checkpoint 不能绕过校验。
 - 缺少/错误 nonce、owner 不同、摘要或条目数不匹配、无增长的歧义输入、已取消或已认领记录均不得承接 pending，也不能重新领取原预算。HTTP fallback 后禁止旧 WS 重新创建该 owner 的恢复记录。
 - 客户端新 session 清空 turn-state 是固定源码结论；网关仍须实现 TTL、取消墓碑、连接代次和服务端互斥，不能靠客户端通常串行代替。双认领/迟到/错误 nonce 的网关测试属于 M3 的 P0，不是 M0 mock 已通过项。
 
@@ -468,7 +470,7 @@ Codex `rust-v0.156.0`：`map_wrapped_websocket_error_event` 把 `previous_respon
 
 标准网关失败由 `proxy/errors.rs` 的 `GatewayFailure` 统一生成，经现有 error hook 后同步最终值；`gateway/client_error.rs` 仅按入站路径/传输适配 OpenAI HTTP、Responses WS、Anthropic HTTP 和 Gemini HTTP。HTTP 在 proxy facade 编码，WS 在发送帧时编码；上游原生错误和插件自定义正文保留原契约，包含额外字段的插件正文不作为标准 DTO 重编码或缓存。Gemini error.code 使用数值 HTTP 状态，WS 同时提供顶层 status 及 Retry-After 提示，不根据 CLI 名称或上游 provider 类型推测格式。
 
-本地拒绝保留实际 400，以通用 `GW_REQUEST_REJECTED` 记录并通过已有 error_details_json 保存具体 reason/reason_code；`previous_response_not_found` 的协议码保持不变。未知断流使用 502，不能用默认 400 伪装输入错误。503 允许外部客户端有限重试，熔断期间实际上游发送为零；供应商不可用不等于 WS 传输不可用，不强制制造 HTTP 降级。
+本地拒绝保留实际 400，以通用 `GW_REQUEST_REJECTED` 记录并通过已有 error_details_json 保存具体 reason/reason_code；正式 WS create 的归属校验拒绝与 HTTP 共用 RequestEnd 通道，错误帧和终态日志使用同一 trace，记录 `failure_class=local`、`upstream_sent=false` 和空 attempts，不记录 nonce/正文或改变供应商健康。预热与读取已有失败结果不重复创建正式日志；详情界面不把本地 400 推断为上游状态码。`previous_response_not_found` 的协议码保持不变。未知断流使用 502，不能用默认 400 伪装输入错误。503 允许外部客户端有限重试，熔断期间实际上游发送为零；供应商不可用不等于 WS 传输不可用，不强制制造 HTTP 降级。
 
 ### 8.2 状态机
 

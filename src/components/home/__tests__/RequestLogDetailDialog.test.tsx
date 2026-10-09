@@ -553,6 +553,60 @@ describe("home/RequestLogDetailDialog", () => {
     expect(screen.getByText(/Provider 内部错误/)).toBeInTheDocument();
   });
 
+  it("shows local nonce rejection as a completed failure without provider retries", () => {
+    const reason = "unknown or expired Responses owner nonce";
+    setRequestLogQueryState({
+      selectedLog: createRequestLogDetail({
+        trace_id: "trace-nonce-rejected",
+        cli_key: "codex",
+        path: "/v1/responses",
+        status: 400,
+        error_code: "GW_REQUEST_REJECTED",
+        duration_ms: 1,
+        ttfb_ms: null,
+        final_provider_id: 0,
+        final_provider_name: "Unknown",
+        attempts_json: "[]",
+        error_details_json: JSON.stringify({
+          error_code: "GW_REQUEST_REJECTED",
+          error_category: "local",
+          reason_code: "invalid_request",
+          reason,
+        }),
+        special_settings_json: JSON.stringify([
+          {
+            type: "codex_responses_transport",
+            scope: "request",
+            client_transport: "responses_ws",
+            failure_class: "local",
+            reason_code: "invalid_request",
+            upstream_sent: false,
+          },
+        ]),
+      }),
+    });
+    setTraceStoreState({ traces: [createLiveTrace("trace-nonce-rejected")] });
+
+    render(<RequestLogDetailDialog selectedLogId={1} onSelectLogId={vi.fn()} />);
+
+    expect(screen.getByText("400 失败")).toBeInTheDocument();
+    expect(screen.getByText("请求或上下文恢复校验未通过")).toBeInTheDocument();
+    expect(screen.queryByText("失败尝试")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "详细信息" }));
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    expect(screen.getByText("local")).toBeInTheDocument();
+    expect(screen.getByText("invalid_request")).toBeInTheDocument();
+    expect(screen.queryByText("上游状态码:")).not.toBeInTheDocument();
+
+    switchToTab("决策链");
+    expect(screen.getByText("本地错误")).toBeInTheDocument();
+    expect(screen.getByText("原因：invalid_request")).toBeInTheDocument();
+    expect(screen.getByText("无故障切换尝试。")).toBeInTheDocument();
+    expect(screen.queryByText("供应商失败")).not.toBeInTheDocument();
+    expect(screen.queryByText("切换供应商")).not.toBeInTheDocument();
+    expect(screen.queryByText("当前供应商：未知")).not.toBeInTheDocument();
+  });
+
   it("uses live trace provider and elapsed duration for in-progress logs", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-29T12:00:00.000Z"));

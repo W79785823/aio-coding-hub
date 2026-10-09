@@ -1,7 +1,7 @@
 //! Bound neutral prefixes and commit only the final, plugin-visible Responses events.
 
 use super::protocol::{self, EventDecoder, EventKind, HistoryDigest};
-use super::state::{Continuation, RequestState};
+use super::state::{Continuation, GenerationLease, RequestState};
 use crate::gateway::streams::{
     is_plugin_stream_error_chunk, UpstreamByteStream, UpstreamResponse, UpstreamStreamError,
 };
@@ -210,12 +210,13 @@ impl Gate {
     }
 
     pub(in crate::gateway) fn into_stream(self) -> UpstreamByteStream {
+        let lease = (!self.request.client_ws).then(|| GenerationLease(Some(self.request.clone())));
         Box::pin(futures_util::stream::unfold(
-            Some(self),
+            Some((self, lease)),
             |state| async move {
-                let mut gate = state?;
+                let (mut gate, lease) = state?;
                 if let Some(bytes) = gate.pop_ready() {
-                    return Some((Ok(bytes), Some(gate)));
+                    return Some((Ok(bytes), Some((gate, lease))));
                 }
                 if gate.terminal {
                     return None;
@@ -229,7 +230,7 @@ impl Gate {
                         if let Err(failure) = gate.queue_event(event, kind) {
                             return Some((Err(failure_error(failure)), None));
                         }
-                        Some((Ok(gate.pop_ready().unwrap()), Some(gate)))
+                        Some((Ok(gate.pop_ready().unwrap()), Some((gate, lease))))
                     }
                     Err(failure) => Some((Err(failure_error(failure)), None)),
                 }
@@ -449,6 +450,47 @@ mod tests {
         let generation = request.generation.lock_or_recover();
         assert!(generation.committed);
         assert!(!generation.terminal);
+    }
+
+    #[tokio::test]
+    async fn http_generation_lease_releases_only_after_a_successful_terminal() {
+        for ending in ["completed", "failed", "cancelled", "eof"] {
+            let mut request = request();
+            request.client_ws = false;
+            let (owner, nonce) = {
+                let generation = request.generation.lock_or_recover();
+                let identity = generation.identity.as_ref().unwrap();
+                (identity.owner.clone(), identity.nonce.clone())
+            };
+            let mut output = vec![json!({"type":"response.output_text.delta","delta":"partial"})];
+            if ending != "eof" {
+                let kind = if ending == "failed" {
+                    "response.failed"
+                } else {
+                    "response.completed"
+                };
+                output.push(json!({"type":kind,"response":{"id":"resp_a","output":[]}}));
+            }
+            let gate = Gate::prepare(events(output), request.clone())
+                .await
+                .unwrap_or_else(|_| panic!("content must commit"));
+            let mut stream = gate.into_stream();
+            assert!(stream.next().await.unwrap().is_ok());
+            if ending == "eof" {
+                assert!(stream.next().await.unwrap().is_err());
+            } else if ending != "cancelled" {
+                while let Some(bytes) = stream.next().await {
+                    assert!(bytes.is_ok());
+                }
+            }
+            drop(stream);
+            let reused = request.connection.runtime.issue_nonce(&owner);
+            if ending == "completed" {
+                assert_eq!(reused.unwrap(), nonce);
+            } else {
+                assert!(reused.is_err(), "must not release {ending} generation");
+            }
+        }
     }
 
     #[tokio::test]
