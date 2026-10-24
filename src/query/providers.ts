@@ -112,6 +112,8 @@ const EMPTY_OAUTH_LIMITS_RESULT: OAuthLimitsResult = {
   limit_5h_remaining_percent: null,
   limit_weekly_remaining_percent: null,
   routing_limited: false,
+  limit_window_seconds: [null, null],
+  quota_estimates: null,
 };
 
 export function normalizeProviderOAuthLimitsResult(
@@ -125,9 +127,15 @@ function oauthLimitsQueryOptions(providerId: number) {
   const normalizedProviderId = validateProviderId(providerId);
   return {
     queryKey: oauthLimitsKeys.detail(normalizedProviderId),
-    queryFn: async () =>
-      normalizeProviderOAuthLimitsResult(await providerOAuthFetchLimits(normalizedProviderId)),
+    queryFn: async () => (await providerOAuthFetchLimits(normalizedProviderId)) ?? null,
   };
+}
+
+export async function clearProviderOAuthLimitsCache(queryClient: QueryClient, providerId: number) {
+  const queryKey = oauthLimitsKeys.detail(validateProviderId(providerId));
+  // An old account's in-flight response must not restore its cleared quota.
+  await queryClient.cancelQueries({ queryKey, exact: true });
+  queryClient.setQueryData(queryKey, null);
 }
 
 export function readProviderOAuthLimitsCache(
@@ -135,7 +143,7 @@ export function readProviderOAuthLimitsCache(
   providerId: number
 ): OAuthLimitsResult | null {
   const normalizedProviderId = validateProviderId(providerId);
-  const state = queryClient.getQueryState<OAuthLimitsResult>(
+  const state = queryClient.getQueryState<OAuthLimitsResult | null>(
     oauthLimitsKeys.detail(normalizedProviderId)
   );
   return state?.data ?? null;
@@ -145,7 +153,7 @@ export async function refreshProviderOAuthLimits(
   queryClient: QueryClient,
   providerId: number,
   options?: { resetCircuitAfterRefresh?: boolean }
-): Promise<OAuthLimitsResult> {
+): Promise<OAuthLimitsResult | null> {
   const normalizedProviderId = validateProviderId(providerId);
   const next = await queryClient.fetchQuery({
     ...oauthLimitsQueryOptions(normalizedProviderId),
@@ -176,10 +184,15 @@ export async function resetProviderOAuthCodexQuota(
   const normalizedProviderId = validateProviderId(providerId);
   const result = await providerOAuthResetCodexQuota(normalizedProviderId);
   const refreshedLimits = result.refreshed_limits;
+  const queryKey = oauthLimitsKeys.detail(normalizedProviderId);
 
+  if (result.success || refreshedLimits) {
+    // An older usage fetch must not restore the pre-reset estimates.
+    await queryClient.cancelQueries({ queryKey, exact: true });
+  }
   if (refreshedLimits) {
     const next = normalizeProviderOAuthLimitsResult(refreshedLimits);
-    queryClient.setQueryData(oauthLimitsKeys.detail(normalizedProviderId), next);
+    queryClient.setQueryData(queryKey, next);
     try {
       if (options?.resetCircuitAfterRefresh) {
         try {
@@ -194,6 +207,10 @@ export async function resetProviderOAuthCodexQuota(
     } finally {
       void queryClient.invalidateQueries({ queryKey: gatewayKeys.circuits() });
     }
+  } else if (result.success) {
+    queryClient.setQueryData<OAuthLimitsResult | null>(queryKey, (previous) =>
+      previous ? { ...previous, quota_estimates: null } : previous
+    );
   }
 
   return result;
@@ -431,6 +448,7 @@ export function useProviderClaudeTerminalLaunchCommandMutation() {
 export function useOAuthLimitsQuery(providerId: number, enabled: boolean) {
   return useQuery({
     ...oauthLimitsQueryOptions(providerId),
+    select: normalizeProviderOAuthLimitsResult,
     enabled,
     staleTime: 180_000,
     refetchInterval: 180_000,
