@@ -5,7 +5,7 @@ use crate::domain::provider_oauth_limits::{
     self as domain, OAuthLimitGate, OAuthLimitSnapshotInput, ProviderOAuthCreditBalance,
 };
 use crate::domain::provider_oauth_quota_estimate::{
-    estimate_window, OAuthQuotaWindow, ProviderOAuthQuotaEstimates,
+    estimate_window, OAuthQuotaWindow, ProviderOAuthQuotaBaselines, ProviderOAuthQuotaEstimates,
 };
 use crate::shared::error::db_err;
 use rusqlite::OptionalExtension;
@@ -316,23 +316,36 @@ pub(crate) async fn attach_quota_estimates(
                 .map_err(|e| db_err!("failed to start quota estimate read: {e}"))?;
             let identity = tx
                 .query_row(
-                    "SELECT p.cli_key, p.oauth_cost_start_at FROM providers p
+                    "SELECT p.cli_key, p.oauth_cost_start_at, p.oauth_quota_baselines_json FROM providers p
                      JOIN provider_oauth_limit_snapshots s ON s.provider_id = p.id
                      WHERE p.id = ?1 AND p.auth_mode = 'oauth'
                        AND p.oauth_access_token = ?2 AND s.revision = ?3",
                     rusqlite::params![provider_id, token, revision],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<i64>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    },
                 )
                 .optional()
                 .map_err(|e| db_err!("failed to read quota estimate identity: {e}"))?;
-            let Some((cli_key, cost_start_at)) = identity else {
+            let Some((cli_key, cost_start_at, baselines_json)) = identity else {
                 return Ok(None);
             };
             if !matches!(cli_key.as_str(), "codex" | "claude") {
                 return Ok(None);
             }
+            let mut baselines: ProviderOAuthQuotaBaselines = baselines_json
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()
+                .map_err(|e| db_err!("failed to read OAuth quota baselines: {e}"))?
+                .unwrap_or_default();
+            let previous_baselines = baselines.clone();
             let now_unix = crate::shared::time::now_unix_seconds();
-            Ok(Some(ProviderOAuthQuotaEstimates {
+            let estimates = ProviderOAuthQuotaEstimates {
                 short: estimate_window(
                     &tx,
                     provider_id,
@@ -343,6 +356,7 @@ pub(crate) async fn attach_quota_estimates(
                         cost_start_at,
                     },
                     now_unix,
+                    &mut baselines.short,
                 )?,
                 weekly: estimate_window(
                     &tx,
@@ -354,8 +368,31 @@ pub(crate) async fn attach_quota_estimates(
                         cost_start_at,
                     },
                     now_unix,
+                    &mut baselines.weekly,
                 )?,
-            }))
+            };
+            tx.commit()
+                .map_err(|e| db_err!("failed to finish quota estimate read: {e}"))?;
+            if baselines != previous_baselines {
+                let updated_json = serde_json::to_string(&baselines)
+                    .map_err(|e| db_err!("failed to encode OAuth quota baselines: {e}"))?;
+                // A login, reset or concurrent UI sample must not be overwritten
+                // after releasing the read transaction.
+                let changed = conn
+                    .execute(
+                        "UPDATE providers SET oauth_quota_baselines_json = ?4
+                         WHERE id = ?1 AND auth_mode = 'oauth' AND oauth_access_token = ?2
+                           AND oauth_quota_baselines_json IS ?5
+                           AND EXISTS (SELECT 1 FROM provider_oauth_limit_snapshots
+                             WHERE provider_id = ?1 AND revision = ?3)",
+                        rusqlite::params![provider_id, token, revision, updated_json, baselines_json],
+                    )
+                    .map_err(|e| db_err!("failed to save OAuth quota baselines: {e}"))?;
+                if changed == 0 {
+                    return Ok(None);
+                }
+            }
+            Ok(Some(estimates))
         }
     })
     .await;
@@ -983,17 +1020,21 @@ mod tests {
         assert!(result.quota_estimates.is_none());
         attach_quota_estimates(&db, provider_id, &mut result).await;
         let estimates = result.quota_estimates.as_ref().unwrap();
-        assert_eq!(
-            estimates.short.as_ref().unwrap().estimated_total_usd,
-            Some(100.0)
-        );
-        assert_eq!(
-            estimates.weekly.as_ref().unwrap().estimated_remaining_usd,
-            Some(60.0)
-        );
+        assert!(estimates
+            .short
+            .as_ref()
+            .unwrap()
+            .estimated_total_usd
+            .is_none());
+        assert!(estimates
+            .weekly
+            .as_ref()
+            .unwrap()
+            .estimated_total_usd
+            .is_none());
         assert!(!result.routing_limited);
         let serialized = serde_json::to_value(&result).unwrap();
-        assert_eq!(serialized["quota_estimates"]["short"]["sample_count"], 1);
+        assert_eq!(serialized["quota_estimates"]["short"]["sample_count"], 0);
         assert_eq!(
             serialized["limit_window_seconds"],
             serde_json::json!([18000, 604800])
@@ -1002,21 +1043,68 @@ mod tests {
 
         {
             let conn = db.open_connection().unwrap();
+            let json: String = conn
+                .query_row(
+                    "SELECT oauth_quota_baselines_json FROM providers WHERE id = ?1",
+                    [provider_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let mut baselines: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(baselines["short"]["used_percent"], 20.0);
+            assert_eq!(baselines["weekly"]["used_percent"], 25.0);
+            // Simulate elapsed time without making the test wait for the clock.
+            baselines["short"]["sample_start_at"] = (now - 30).into();
+            baselines["weekly"]["sample_start_at"] = (now - 30).into();
             conn.execute(
-                "UPDATE providers SET oauth_cost_start_at = ?1 WHERE id = ?2",
-                rusqlite::params![now - 1, provider_id],
+                "UPDATE providers SET oauth_quota_baselines_json = ?1 WHERE id = ?2",
+                rusqlite::params![baselines.to_string(), provider_id],
             )
             .unwrap();
             conn.execute(
                 "INSERT INTO request_logs(trace_id, cli_key, method, path, status, created_at,
                   final_provider_id, cost_usd_femto)
-                 VALUES ('current-login', 'codex', 'POST', '/responses', 200, ?1, ?2, 1000000000000000)",
+                 VALUES ('after-baseline', 'codex', 'POST', '/responses', 200, ?1, ?2, 1000000000000000)",
                 rusqlite::params![now, provider_id],
             )
             .unwrap();
         }
-        attach_quota_estimates(&db, provider_id, &mut result).await;
+        result.limit_5h_remaining_percent = Some(75.0);
+        result.limit_weekly_remaining_percent = Some(74.0);
+        let revision = read_snapshot_revision(&db, provider_id).await.unwrap();
+        save_result(app.handle(), &db, &details, &mut result, revision)
+            .await
+            .unwrap();
+        // Reopening the DB must preserve the same sample for both windows.
+        let reopened = crate::db::init_for_tests(&_dir.path().join("quota-flight.db")).unwrap();
+        attach_quota_estimates(&reopened, provider_id, &mut result).await;
+        let estimates = result.quota_estimates.as_ref().unwrap();
+        assert_eq!(estimates.short.as_ref().unwrap().used_usd, Some(1.0));
         assert_eq!(
+            estimates.short.as_ref().unwrap().estimated_total_usd,
+            Some(20.0)
+        );
+        assert_eq!(
+            estimates.short.as_ref().unwrap().estimated_remaining_usd,
+            Some(15.0)
+        );
+        assert_eq!(
+            estimates.weekly.as_ref().unwrap().estimated_total_usd,
+            Some(100.0)
+        );
+        assert_eq!(
+            estimates.weekly.as_ref().unwrap().estimated_remaining_usd,
+            Some(74.0)
+        );
+        db.open_connection()
+            .unwrap()
+            .execute(
+                "UPDATE providers SET oauth_cost_start_at = ?1 WHERE id = ?2",
+                rusqlite::params![now - 1, provider_id],
+            )
+            .unwrap();
+        attach_quota_estimates(&db, provider_id, &mut result).await;
+        assert!(
             result
                 .quota_estimates
                 .as_ref()
@@ -1024,9 +1112,9 @@ mod tests {
                 .short
                 .as_ref()
                 .unwrap()
-                .estimated_total_usd,
-            Some(5.0),
-            "the UI must use the current login boundary when aggregating costs"
+                .estimated_total_usd
+                .is_none(),
+            "a new login boundary must restart the sample"
         );
 
         db.open_connection()
@@ -1041,15 +1129,72 @@ mod tests {
         attach_quota_estimates(&db, provider_id, &mut result).await;
         assert!(result.quota_estimates.is_none());
         assert_eq!(result.limit_window_seconds, (Some(18000), Some(604800)));
-        assert_eq!(result.limit_5h_remaining_percent, Some(80.0));
+        assert_eq!(result.limit_5h_remaining_percent, Some(75.0));
         assert!(!result.routing_limited);
         assert_eq!(
             domain::read_snapshot(&db.open_connection().unwrap(), provider_id)
                 .unwrap()
                 .unwrap()
                 .limit_5h_remaining_percent,
-            Some(80.0)
+            Some(75.0)
         );
+    }
+
+    #[tokio::test]
+    async fn quota_sampling_reset_rejects_stale_tokens_and_pre_reset_enrichment() {
+        let (_dir, db, provider_id) = quota_test_provider();
+        let app = tauri::test::mock_app();
+        let details = crate::providers::get_oauth_details(&db, provider_id).unwrap();
+        let now = crate::shared::time::now_unix_seconds();
+        let mut result = parsed_codex(serde_json::json!({"rate_limit": {
+            "primary_window": {"used_percent": 20, "reset_at": now + 3600}
+        }}));
+        save_result(app.handle(), &db, &details, &mut result, 0)
+            .await
+            .unwrap();
+        attach_quota_estimates(&db, provider_id, &mut result).await;
+        let read_baseline = || {
+            db.open_connection()
+                .unwrap()
+                .query_row(
+                    "SELECT oauth_quota_baselines_json FROM providers WHERE id = ?1",
+                    [provider_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .unwrap()
+        };
+        let baseline = read_baseline().unwrap();
+        use crate::domain::provider_oauth_quota_estimate::reset_sampling;
+        assert!(reset_sampling(&db, provider_id, "old-account-token").is_err());
+        assert_eq!(read_baseline().as_deref(), Some(baseline.as_str()));
+        assert_eq!(read_snapshot_revision(&db, provider_id).await.unwrap(), 1);
+
+        reset_sampling(&db, provider_id, &details.oauth_access_token).unwrap();
+        assert!(read_baseline().is_none());
+        assert_eq!(read_snapshot_revision(&db, provider_id).await.unwrap(), 2);
+        attach_quota_estimates(&db, provider_id, &mut result).await;
+        assert!(result.quota_estimates.is_none());
+        assert!(
+            read_baseline().is_none(),
+            "old responses must not restore the sample"
+        );
+
+        result.limit_5h_remaining_percent = Some(100.0);
+        save_result(app.handle(), &db, &details, &mut result, 2)
+            .await
+            .unwrap();
+        attach_quota_estimates(&db, provider_id, &mut result).await;
+        assert!(result
+            .quota_estimates
+            .as_ref()
+            .unwrap()
+            .short
+            .as_ref()
+            .unwrap()
+            .estimated_total_usd
+            .is_none());
+        let next: serde_json::Value = serde_json::from_str(&read_baseline().unwrap()).unwrap();
+        assert_eq!(next["short"]["used_percent"], 0.0);
     }
 
     #[tokio::test]

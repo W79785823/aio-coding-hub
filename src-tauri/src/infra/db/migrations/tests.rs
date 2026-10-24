@@ -1026,6 +1026,7 @@ INSERT INTO providers(
         "oauth_email",
         "oauth_last_refreshed_at",
         "oauth_cost_start_at",
+        "oauth_quota_baselines_json",
         "oauth_last_error",
         "oauth_refresh_lead_s",
     ] {
@@ -1044,6 +1045,37 @@ INSERT INTO providers(
 
     // Idempotent: second run should succeed.
     apply_migrations(&mut conn).expect("apply migrations twice");
+}
+
+#[test]
+fn oauth_quota_baseline_migration_starts_empty_and_preserves_samples_on_reopen() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    apply_migrations(&mut conn).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE providers DROP COLUMN oauth_quota_baselines_json;
+         INSERT INTO providers(id, cli_key, name, base_url, api_key_plaintext,
+           created_at, updated_at, auth_mode, oauth_cost_start_at)
+         VALUES (901, 'codex', 'oauth', '', '', 1, 1, 'oauth', 123);",
+    )
+    .unwrap();
+    apply_migrations(&mut conn).unwrap();
+    let read_sampling = |conn: &Connection| {
+        conn.query_row(
+            "SELECT oauth_cost_start_at, oauth_quota_baselines_json FROM providers WHERE id = 901",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+        )
+        .unwrap()
+    };
+    assert_eq!(read_sampling(&conn), (123, None));
+    let baseline = r#"{"short":{"window_start":1,"window_end":18001,"sample_start_at":123,"used_percent":20},"weekly":null}"#;
+    conn.execute(
+        "UPDATE providers SET oauth_quota_baselines_json = ?1 WHERE id = 901",
+        [baseline],
+    )
+    .unwrap();
+    apply_migrations(&mut conn).unwrap();
+    assert_eq!(read_sampling(&conn), (123, Some(baseline.to_string())));
 }
 
 #[test]

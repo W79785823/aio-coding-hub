@@ -38,6 +38,20 @@ pub(crate) struct ProviderOAuthQuotaEstimates {
     pub weekly: Option<OAuthQuotaEstimate>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ProviderOAuthQuotaBaselines {
+    pub short: Option<OAuthQuotaBaseline>,
+    pub weekly: Option<OAuthQuotaBaseline>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct OAuthQuotaBaseline {
+    window_start: i64,
+    window_end: i64,
+    sample_start_at: i64,
+    used_percent: f64,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct OAuthQuotaWindow {
     pub remaining_percent: Option<f64>,
@@ -46,13 +60,44 @@ pub(crate) struct OAuthQuotaWindow {
     pub cost_start_at: Option<i64>,
 }
 
-/// A reset-aligned window keeps the numerator and upstream utilization on the
-/// same period. Unknown/expired windows and unsupported providers yield None.
+pub(crate) fn reset_sampling(
+    db: &crate::db::Db,
+    provider_id: i64,
+    expected_access_token: &str,
+) -> AppResult<()> {
+    let mut conn = db.open_connection()?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| db_err!("failed to start quota sampling reset: {e}"))?;
+    let changed = tx
+        .execute(
+            "UPDATE providers SET oauth_quota_baselines_json = NULL
+             WHERE id = ?1 AND auth_mode = 'oauth' AND oauth_access_token = ?2",
+            params![provider_id, expected_access_token],
+        )
+        .map_err(|e| db_err!("failed to reset OAuth quota sampling: {e}"))?;
+    if changed == 0 {
+        return Err(
+            "OAUTH_QUOTA_STALE_TOKEN: account changed while resetting quota sampling".into(),
+        );
+    }
+    tx.execute(
+        "UPDATE provider_oauth_limit_snapshots SET revision = revision + 1 WHERE provider_id = ?1",
+        [provider_id],
+    )
+    .map_err(|e| db_err!("failed to invalidate pre-reset quota sample: {e}"))?;
+    tx.commit()
+        .map_err(|e| db_err!("failed to commit quota sampling reset: {e}"))?;
+    Ok(())
+}
+
+/// Match local costs to the utilization change since the first quota sample.
 pub(crate) fn estimate_window(
     conn: &Connection,
     provider_id: i64,
     window: OAuthQuotaWindow,
     now_unix: i64,
+    baseline: &mut Option<OAuthQuotaBaseline>,
 ) -> AppResult<Option<OAuthQuotaEstimate>> {
     let Some(remaining) = window
         .remaining_percent
@@ -73,6 +118,23 @@ pub(crate) fn estimate_window(
         return Ok(None);
     };
     let cost_start_at = start_at.max(window.cost_start_at.unwrap_or(start_at));
+    let current_used_percent = 100.0 - remaining;
+    if !baseline.as_ref().is_some_and(|baseline| {
+        baseline.window_start == start_at
+            && baseline.window_end == reset_at
+            && baseline.sample_start_at >= cost_start_at
+            && baseline.used_percent <= current_used_percent
+    }) {
+        *baseline = Some(OAuthQuotaBaseline {
+            window_start: start_at,
+            window_end: reset_at,
+            // Logs use request start seconds. Exclude the first sample's second
+            // so requests already reflected in its utilization are not counted.
+            sample_start_at: now_unix.saturating_add(1).max(cost_start_at),
+            used_percent: current_used_percent,
+        });
+    }
+    let baseline = baseline.as_ref().expect("initialized quota baseline");
 
     // TOTAL avoids SQLite integer-SUM overflow. Like sub2api, estimate from
     // recorded costs even when other requests are unpriced. Keep their count
@@ -80,13 +142,13 @@ pub(crate) fn estimate_window(
     let (cost_femto, sample_count, unpriced_count): (f64, i64, i64) = conn
         .query_row(
             WINDOW_COST_SQL,
-            params![provider_id, cost_start_at, now_unix],
+            params![provider_id, baseline.sample_start_at, now_unix],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map_err(|e| db_err!("failed to query OAuth quota estimate costs: {e}"))?;
     let used_usd = (sample_count > unpriced_count && cost_femto.is_finite())
         .then_some(cost_femto / USD_FEMTO_DENOM);
-    let used_percent = 100.0 - remaining;
+    let used_percent = current_used_percent - baseline.used_percent;
     let estimated_total_usd = used_usd
         .filter(|used| *used > 0.0 && used_percent > 0.0)
         .map(|used| used * 100.0 / used_percent)
@@ -142,12 +204,158 @@ mod tests {
         }
     }
 
+    fn estimate_from_window_start(
+        conn: &Connection,
+        provider_id: i64,
+        window: OAuthQuotaWindow,
+        now_unix: i64,
+    ) -> AppResult<Option<OAuthQuotaEstimate>> {
+        let start = window.reset_at.unwrap_or(0) - window.duration_seconds.unwrap_or(0);
+        let mut baseline = Some(OAuthQuotaBaseline {
+            window_start: start,
+            window_end: window.reset_at.unwrap_or(0),
+            sample_start_at: start.max(window.cost_start_at.unwrap_or(start)),
+            used_percent: 0.0,
+        });
+        estimate_window(conn, provider_id, window, now_unix, &mut baseline)
+    }
+
+    #[test]
+    fn quota_estimate_matches_cost_and_utilization_since_the_first_sample() {
+        let conn = database();
+        insert(&conn, 1, START, Some(20_000_000_000_000_000));
+        insert(&conn, 1, NOW, Some(5_000_000_000_000_000));
+        let mut baseline = None;
+        let first = estimate_window(&conn, 1, window(80.0), NOW, &mut baseline)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.sample_count, 0);
+        assert!(first.estimated_total_usd.is_none());
+
+        insert(&conn, 1, NOW + 5, Some(1_000_000_000_000_000));
+        let next = estimate_window(&conn, 1, window(75.0), NOW + 10, &mut baseline)
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.used_usd, Some(1.0));
+        assert_eq!(next.estimated_total_usd, Some(20.0));
+        assert_eq!(next.estimated_remaining_usd, Some(15.0));
+        assert_eq!(next.sample_count, 1);
+
+        insert(&conn, 1, NOW + 15, Some(1_000_000_000_000_000));
+        let next = estimate_window(&conn, 1, window(70.0), NOW + 20, &mut baseline)
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.used_usd, Some(2.0));
+        assert_eq!(next.estimated_total_usd, Some(20.0));
+        assert_eq!(next.estimated_remaining_usd, Some(14.0));
+    }
+
+    #[test]
+    fn quota_estimate_maintains_independent_short_and_weekly_samples() {
+        let conn = database();
+        let mut baselines = ProviderOAuthQuotaBaselines::default();
+        let weekly = OAuthQuotaWindow {
+            duration_seconds: Some(7 * 24 * 3600),
+            reset_at: Some(START + 7 * 24 * 3600),
+            remaining_percent: Some(83.0),
+            ..window(96.0)
+        };
+        estimate_window(&conn, 1, window(96.0), NOW, &mut baselines.short).unwrap();
+        estimate_window(&conn, 1, weekly, NOW, &mut baselines.weekly).unwrap();
+        insert(&conn, 1, NOW + 5, Some(1_000_000_000_000_000));
+        let short = estimate_window(&conn, 1, window(91.0), NOW + 10, &mut baselines.short)
+            .unwrap()
+            .unwrap();
+        let weekly = estimate_window(
+            &conn,
+            1,
+            OAuthQuotaWindow {
+                remaining_percent: Some(82.0),
+                ..weekly
+            },
+            NOW + 10,
+            &mut baselines.weekly,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(short.estimated_total_usd, Some(20.0));
+        assert_eq!(weekly.estimated_total_usd, Some(100.0));
+        assert_eq!(weekly.estimated_remaining_usd, Some(82.0));
+    }
+
+    #[test]
+    fn quota_estimate_restarts_after_rollover_or_utilization_reset() {
+        let conn = database();
+        let mut baseline = None;
+        estimate_window(&conn, 1, window(80.0), NOW, &mut baseline).unwrap();
+        insert(&conn, 1, NOW + 5, Some(50_000_000_000_000_000));
+
+        let next_window = OAuthQuotaWindow {
+            reset_at: Some(RESET + 5 * 3600),
+            ..window(90.0)
+        };
+        let rolled = estimate_window(&conn, 1, next_window, RESET + 10, &mut baseline)
+            .unwrap()
+            .unwrap();
+        assert!(rolled.estimated_total_usd.is_none());
+        insert(&conn, 1, RESET + 15, Some(1_000_000_000_000_000));
+        let next = estimate_window(
+            &conn,
+            1,
+            OAuthQuotaWindow {
+                remaining_percent: Some(85.0),
+                ..next_window
+            },
+            RESET + 20,
+            &mut baseline,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(next.estimated_total_usd, Some(20.0));
+
+        let reset = estimate_window(
+            &conn,
+            1,
+            OAuthQuotaWindow {
+                remaining_percent: Some(100.0),
+                ..next_window
+            },
+            RESET + 25,
+            &mut baseline,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(reset.estimated_total_usd.is_none());
+        assert_eq!(reset.sample_count, 0);
+    }
+
+    #[test]
+    fn quota_estimate_waits_for_cost_and_percent_growth() {
+        let conn = database();
+        let mut baseline = None;
+        estimate_window(&conn, 1, window(80.0), NOW, &mut baseline).unwrap();
+        let no_cost = estimate_window(&conn, 1, window(75.0), NOW + 5, &mut baseline)
+            .unwrap()
+            .unwrap();
+        assert!(no_cost.estimated_total_usd.is_none());
+
+        insert(&conn, 1, NOW + 10, Some(1_000_000_000_000_000));
+        let no_growth = estimate_window(&conn, 1, window(80.0), NOW + 15, &mut baseline)
+            .unwrap()
+            .unwrap();
+        assert!(no_growth.estimated_total_usd.is_none());
+        let next = estimate_window(&conn, 1, window(75.0), NOW + 20, &mut baseline)
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.estimated_total_usd, Some(20.0));
+    }
+
     #[test]
     fn quota_estimate_matches_sub2api_formula_and_actual_window() {
         let conn = database();
         insert(&conn, 1, START, Some(10_000_000_000_000_000));
         insert(&conn, 1, NOW, Some(10_000_000_000_000_000));
-        let estimate = estimate_window(&conn, 1, window(80.0), NOW)
+        let estimate = estimate_from_window_start(&conn, 1, window(80.0), NOW)
             .unwrap()
             .unwrap();
         assert_eq!(estimate.used_usd, Some(20.0));
@@ -162,7 +370,7 @@ mod tests {
             ..window(80.0)
         };
         assert_eq!(
-            estimate_window(&conn, 1, weekly, NOW)
+            estimate_from_window_start(&conn, 1, weekly, NOW)
                 .unwrap()
                 .unwrap()
                 .estimated_total_usd,
@@ -191,7 +399,7 @@ mod tests {
             )
             .unwrap();
         }
-        let estimate = estimate_window(&conn, 1, window(50.0), NOW)
+        let estimate = estimate_from_window_start(&conn, 1, window(50.0), NOW)
             .unwrap()
             .unwrap();
         assert_eq!(estimate.used_usd, Some(1.0));
@@ -214,7 +422,9 @@ mod tests {
             cost_start_at: Some(NOW),
             ..window(80.0)
         };
-        let estimate = estimate_window(&conn, 1, current, NOW).unwrap().unwrap();
+        let estimate = estimate_from_window_start(&conn, 1, current, NOW)
+            .unwrap()
+            .unwrap();
         assert_eq!(estimate.used_usd, Some(3.0));
         assert_eq!(estimate.estimated_total_usd, Some(15.0));
         assert_eq!(estimate.sample_count, 2);
@@ -224,7 +434,7 @@ mod tests {
             cost_start_at: Some(NOW + 1),
             ..current
         };
-        let empty = estimate_window(&conn, 1, just_logged_in, NOW)
+        let empty = estimate_from_window_start(&conn, 1, just_logged_in, NOW)
             .unwrap()
             .unwrap();
         assert_eq!(empty.sample_count, 0);
@@ -262,7 +472,7 @@ mod tests {
     #[test]
     fn quota_estimate_uses_priced_samples_when_other_costs_are_missing() {
         let conn = database();
-        let empty = estimate_window(&conn, 1, window(80.0), NOW)
+        let empty = estimate_from_window_start(&conn, 1, window(80.0), NOW)
             .unwrap()
             .unwrap();
         assert!(empty.used_usd.is_none());
@@ -271,7 +481,7 @@ mod tests {
         for cost in [None, Some(-1)] {
             insert(&conn, 1, NOW, cost);
         }
-        let unpriced = estimate_window(&conn, 1, window(80.0), NOW)
+        let unpriced = estimate_from_window_start(&conn, 1, window(80.0), NOW)
             .unwrap()
             .unwrap();
         assert!(unpriced.used_usd.is_none());
@@ -279,7 +489,7 @@ mod tests {
         assert!(unpriced.estimated_remaining_usd.is_none());
         assert_eq!(unpriced.unpriced_count, 2);
         insert(&conn, 1, NOW, Some(1_000_000_000_000_000));
-        let partial = estimate_window(&conn, 1, window(80.0), NOW)
+        let partial = estimate_from_window_start(&conn, 1, window(80.0), NOW)
             .unwrap()
             .unwrap();
         assert_eq!(partial.used_usd, Some(1.0));
@@ -293,14 +503,14 @@ mod tests {
     fn quota_estimate_keeps_recalculating_after_an_unpriced_request() {
         let conn = database();
         insert(&conn, 1, NOW, Some(20_000_000_000_000_000));
-        let initial = estimate_window(&conn, 1, window(80.0), NOW)
+        let initial = estimate_from_window_start(&conn, 1, window(80.0), NOW)
             .unwrap()
             .unwrap();
         assert_eq!(initial.estimated_total_usd, Some(100.0));
         assert_eq!(initial.unpriced_count, 0);
 
         insert(&conn, 1, NOW, None);
-        let partial = estimate_window(&conn, 1, window(80.0), NOW)
+        let partial = estimate_from_window_start(&conn, 1, window(80.0), NOW)
             .unwrap()
             .unwrap();
         assert_eq!(partial.estimated_total_usd, Some(100.0));
@@ -308,7 +518,7 @@ mod tests {
         assert_eq!(partial.unpriced_count, 1);
 
         insert(&conn, 1, NOW, Some(10_000_000_000_000_000));
-        let updated = estimate_window(&conn, 1, window(75.0), NOW)
+        let updated = estimate_from_window_start(&conn, 1, window(75.0), NOW)
             .unwrap()
             .unwrap();
         assert_eq!(updated.used_usd, Some(30.0));
@@ -361,7 +571,7 @@ mod tests {
             )
             .unwrap();
         }
-        let estimate = estimate_window(&conn, 1, window(50.0), NOW)
+        let estimate = estimate_from_window_start(&conn, 1, window(50.0), NOW)
             .unwrap()
             .unwrap();
         assert_eq!(estimate.sample_count, 3);
@@ -373,28 +583,28 @@ mod tests {
     fn quota_estimate_handles_full_empty_fractional_and_large_costs() {
         let conn = database();
         insert(&conn, 1, NOW, Some(1_000_000_000_000_000));
-        let full = estimate_window(&conn, 1, window(100.0), NOW)
+        let full = estimate_from_window_start(&conn, 1, window(100.0), NOW)
             .unwrap()
             .unwrap();
         assert!(full.estimated_total_usd.is_none());
-        let exhausted = estimate_window(&conn, 1, window(0.0), NOW)
+        let exhausted = estimate_from_window_start(&conn, 1, window(0.0), NOW)
             .unwrap()
             .unwrap();
         assert_eq!(exhausted.estimated_total_usd, Some(1.0));
         assert_eq!(exhausted.estimated_remaining_usd, Some(0.0));
-        let fractional = estimate_window(&conn, 1, window(99.5), NOW)
+        let fractional = estimate_from_window_start(&conn, 1, window(99.5), NOW)
             .unwrap()
             .unwrap();
         assert_eq!(fractional.estimated_total_usd, Some(200.0));
         assert_eq!(fractional.estimated_remaining_usd, Some(199.0));
         insert(&conn, 2, NOW, Some(i64::MAX));
         insert(&conn, 2, NOW, Some(i64::MAX));
-        let large = estimate_window(&conn, 2, window(50.0), NOW)
+        let large = estimate_from_window_start(&conn, 2, window(50.0), NOW)
             .unwrap()
             .unwrap();
         assert!(large.estimated_total_usd.unwrap() > 30_000.0);
         insert(&conn, 3, NOW, Some(0));
-        assert!(estimate_window(&conn, 3, window(50.0), NOW)
+        assert!(estimate_from_window_start(&conn, 3, window(50.0), NOW)
             .unwrap()
             .unwrap()
             .estimated_total_usd
@@ -405,7 +615,7 @@ mod tests {
     fn quota_estimate_rejects_missing_invalid_and_expired_windows() {
         let conn = database();
         for remaining in [f64::NAN, f64::INFINITY, -0.1, 100.1] {
-            assert!(estimate_window(&conn, 1, window(remaining), NOW)
+            assert!(estimate_from_window_start(&conn, 1, window(remaining), NOW)
                 .unwrap()
                 .is_none());
         }
@@ -443,12 +653,14 @@ mod tests {
                 ..window(80.0)
             },
         ] {
-            assert!(estimate_window(&conn, 1, invalid, NOW).unwrap().is_none());
+            assert!(estimate_from_window_start(&conn, 1, invalid, NOW)
+                .unwrap()
+                .is_none());
         }
-        assert!(estimate_window(&conn, 0, window(80.0), NOW)
+        assert!(estimate_from_window_start(&conn, 0, window(80.0), NOW)
             .unwrap()
             .is_none());
-        assert!(estimate_window(&conn, 1, window(80.0), -1)
+        assert!(estimate_from_window_start(&conn, 1, window(80.0), -1)
             .unwrap()
             .is_none());
     }
@@ -456,6 +668,6 @@ mod tests {
     #[test]
     fn quota_estimate_propagates_database_errors() {
         let conn = Connection::open_in_memory().unwrap();
-        assert!(estimate_window(&conn, 1, window(80.0), NOW).is_err());
+        assert!(estimate_from_window_start(&conn, 1, window(80.0), NOW).is_err());
     }
 }

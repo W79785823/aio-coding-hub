@@ -44,11 +44,68 @@ describe("OAuthQuotaUsageInline quota estimates", () => {
     );
     expect(screen.getByText("预估额度(5h): ~$100.00(剩余 ~$80.00)")).toHaveAttribute(
       "title",
-      expect.stringContaining("本地已用: $20.00，样本: 3 次")
+      expect.stringContaining("采样费用: $20.00，样本: 3 次")
     );
     expect(screen.getByText("可用点数: 0")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "可重置次数: 1(点击重置)" }));
     expect(onReset).toHaveBeenCalledOnce();
+  });
+
+  it("moves from initial sampling to an estimate and clears it when a reset starts a new sample", () => {
+    const pending = {
+      ...estimate,
+      used_usd: null,
+      estimated_total_usd: null,
+      estimated_remaining_usd: null,
+      sample_count: 0,
+    };
+    const { rerender } = render(
+      <OAuthQuotaUsageInline
+        cliKey="codex"
+        nowUnix={now}
+        limits={limits({ quota_estimates: { short: pending, weekly: null } })}
+      />
+    );
+    expect(screen.getByText("预估额度(5h): 待积累用量")).toBeInTheDocument();
+    expect(screen.getByText(/^5h: 80%/)).toBeInTheDocument();
+    rerender(
+      <OAuthQuotaUsageInline
+        cliKey="codex"
+        nowUnix={now}
+        limits={limits({
+          limit_5h_text: "75%",
+          limit_5h_remaining_percent: 75,
+          quota_estimates: {
+            short: {
+              ...estimate,
+              used_usd: 1,
+              estimated_total_usd: 20,
+              estimated_remaining_usd: 15,
+              sample_count: 1,
+            },
+            weekly: null,
+          },
+        })}
+      />
+    );
+    const sampled = screen.getByText("预估额度(5h): ~$20.00(剩余 ~$15.00)");
+    expect(sampled).toHaveAttribute("title", expect.stringContaining("采样费用: $1.00"));
+    expect(sampled).toHaveAttribute("title", expect.stringContaining("同期已用比例增量"));
+    expect(screen.getByText(/^5h: 75%/)).toBeInTheDocument();
+    rerender(
+      <OAuthQuotaUsageInline
+        cliKey="codex"
+        nowUnix={now}
+        limits={limits({
+          limit_5h_text: "100%",
+          limit_5h_remaining_percent: 100,
+          quota_estimates: { short: pending, weekly: null },
+        })}
+      />
+    );
+    expect(screen.getByText("预估额度(5h): 待积累用量")).toBeInTheDocument();
+    expect(screen.queryByText(/预估额度.*\$/)).not.toBeInTheDocument();
+    expect(screen.getByText(/^5h: 100%/)).toBeInTheDocument();
   });
 
   it("uses the actual window duration including a weekly primary window", () => {

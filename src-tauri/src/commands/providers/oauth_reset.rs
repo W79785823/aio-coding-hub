@@ -197,6 +197,19 @@ async fn consume_codex_reset_credit_and_refresh(
         .map_err(|e| format!("codex reset parse failed: {e}"))?;
 
     let refreshed = async {
+        blocking::run("oauth_quota_reset_sampling", {
+            let db = db.clone();
+            let access_token = details.oauth_access_token.clone();
+            move || {
+                crate::domain::provider_oauth_quota_estimate::reset_sampling(
+                    &db,
+                    provider_id,
+                    &access_token,
+                )
+            }
+        })
+        .await
+        .map_err(Into::<String>::into)?;
         let revision = limits::read_snapshot_revision(db, provider_id).await?;
         let refreshed_limits = fetch_codex_usage_limits(
             client,
@@ -375,6 +388,21 @@ mod tests {
         )
     }
 
+    fn seed_quota_sample(db: &crate::db::Db) {
+        db.open_connection()
+            .unwrap()
+            .execute_batch(
+                r#"INSERT INTO providers(id, cli_key, name, base_url, api_key_plaintext,
+                   created_at, updated_at, auth_mode, oauth_provider_type, oauth_access_token,
+                   oauth_quota_baselines_json)
+                   VALUES (1, 'codex', 'reset', '', '', 1, 1, 'oauth', 'codex_oauth', 'access-token',
+                     '{"short":{"window_start":1,"window_end":18001,"sample_start_at":2,"used_percent":20},"weekly":null}');
+                   INSERT INTO provider_oauth_limit_snapshots(provider_id, checked_at, updated_at, revision)
+                   VALUES (1, 1, 1, 3);"#,
+            )
+            .unwrap();
+    }
+
     async fn record_consume(
         State(state): State<TestQuotaState>,
         headers: HeaderMap,
@@ -521,6 +549,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let db = crate::db::init_for_tests(&dir.path().join("reset.db")).expect("init db");
+        seed_quota_sample(&db);
         let mut details = codex_details(1);
         details.oauth_id_token = Some(account_id_token("acct_123"));
         let (result, _) =
@@ -537,6 +566,20 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("codex usage fetch status"));
+        let baseline: Option<String> = db
+            .open_connection()
+            .unwrap()
+            .query_row(
+                "SELECT oauth_quota_baselines_json FROM providers WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            baseline.is_none(),
+            "a consumed reset must discard the old sample even if refresh fails"
+        );
+        assert_eq!(limits::read_snapshot_revision(&db, 1).await.unwrap(), 4);
 
         let requests = requests.lock().expect("lock requests");
         assert_eq!(requests.len(), 2);
@@ -575,15 +618,17 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let db = crate::db::init_for_tests(&dir.path().join("reset.db")).expect("init db");
+        seed_quota_sample(&db);
         let mut details = codex_details(1);
         details.oauth_id_token = Some(account_id_token("acct_123"));
-        let (result, _) =
+        let (result, revision) =
             consume_codex_reset_credit_and_refresh(&db, &client, &endpoints, &mut details)
                 .await
                 .expect("reset success");
         let refreshed = result.refreshed_limits.expect("refreshed limits");
 
         assert!(result.success);
+        assert_eq!(revision, Some(4));
         assert_eq!(refreshed.limit_5h_text.as_deref(), Some("75%"));
         assert_eq!(refreshed.limit_weekly_text.as_deref(), Some("90%"));
         assert_eq!(refreshed.limit_5h_reset_at, Some(1_800));

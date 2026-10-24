@@ -104,7 +104,8 @@ function buildOAuthQuotaUsageSegments({
       if (seconds <= 0 || !Number.isFinite(seconds)) continue;
       const label = key === "shortEstimate" ? shortLabel : weeklyLabel;
       const prefix = `预估额度(${label})`;
-      const hint = "根据本窗口本地费用与账号已用比例换算，仅供参考；外部使用或模型变化会影响预估。";
+      const hint =
+        "根据首次同步后的本地采样费用与同期已用比例增量换算，仅供参考；外部使用或模型变化会影响预估。";
       const total = estimate.estimated_total_usd;
       const remaining = estimate.estimated_remaining_usd;
       const hasEstimate =
@@ -137,7 +138,7 @@ function buildOAuthQuotaUsageSegments({
             : `${prefix}: ${unknownReason}`,
         title:
           hasEstimate && !expired
-            ? `${prefix}: ~${formatEstimateUsd(total)}，预估剩余: ~${formatEstimateUsd(remaining)}，本地已用: ${usedText}，样本: ${estimate.sample_count} 次。${missingCostHint}${hint}`
+            ? `${prefix}: ~${formatEstimateUsd(total)}，预估剩余: ~${formatEstimateUsd(remaining)}，采样费用: ${usedText}，样本: ${estimate.sample_count} 次。${missingCostHint}${hint}`
             : `${prefix}: ${unknownReason}。${hint}`,
       });
     }

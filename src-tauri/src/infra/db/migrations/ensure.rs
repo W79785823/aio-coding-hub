@@ -529,6 +529,9 @@ fn ensure_provider_oauth_columns(conn: &mut Connection) -> Result<(), String> {
     if !existing.contains("oauth_cost_start_at") {
         ddl.push("ALTER TABLE providers ADD COLUMN oauth_cost_start_at INTEGER;");
     }
+    if !existing.contains("oauth_quota_baselines_json") {
+        ddl.push("ALTER TABLE providers ADD COLUMN oauth_quota_baselines_json TEXT;");
+    }
     if !existing.contains("oauth_last_error") {
         ddl.push("ALTER TABLE providers ADD COLUMN oauth_last_error TEXT;");
     }

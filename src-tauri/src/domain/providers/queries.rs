@@ -1500,6 +1500,8 @@ SET
   auth_mode = ?5,
   oauth_cost_start_at = CASE WHEN auth_mode != ?5
     THEN MAX(COALESCE(oauth_cost_start_at, 0), ?27 + 1) ELSE oauth_cost_start_at END,
+  oauth_quota_baselines_json = CASE WHEN auth_mode != ?5
+    THEN NULL ELSE oauth_quota_baselines_json END,
   claude_models_json = ?6,
   model_policy_json = ?7,
   supported_models_json = ?8,
@@ -2033,6 +2035,7 @@ UPDATE providers SET
   oauth_email = ?10,
   oauth_last_refreshed_at = ?11,
   oauth_cost_start_at = MAX(COALESCE(oauth_cost_start_at, 0), ?11 + 1),
+  oauth_quota_baselines_json = NULL,
   oauth_last_error = NULL,
   updated_at = ?11
 WHERE id = ?12
@@ -2136,6 +2139,7 @@ UPDATE providers SET
   auth_mode = 'api_key',
   oauth_provider_type = NULL,
   oauth_access_token = NULL,
+  oauth_quota_baselines_json = NULL,
   oauth_refresh_token = NULL,
   oauth_id_token = NULL,
   oauth_token_uri = NULL,
