@@ -14,6 +14,7 @@ import {
   type DbDiskUsage,
 } from "../services/app/dataManagement";
 import type { GatewayStatus } from "../services/gateway/gateway";
+import { clearProviderOAuthQuotaEstimatesCache } from "./providers";
 import {
   cliProxyKeys,
   dataManagementKeys,
@@ -134,8 +135,10 @@ export function useRequestLogsClearAllMutation() {
 
   return useMutation({
     mutationFn: () => requestLogsClearAll(),
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       if (!result) return;
+      await clearProviderOAuthQuotaEstimatesCache(queryClient);
+      void queryClient.invalidateQueries({ queryKey: oauthLimitsKeys.all });
       queryClient.invalidateQueries({ queryKey: dataManagementKeys.dbDiskUsage() });
       queryClient.invalidateQueries({ queryKey: requestLogsKeys.all });
     },

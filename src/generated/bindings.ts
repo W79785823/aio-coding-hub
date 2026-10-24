@@ -2384,6 +2384,13 @@ export type ClaudeCliInfo = {
   mcp_timeout_ms: number | null;
   disable_error_reporting: boolean;
 };
+export type ClaudeDesktopConfigStatus = {
+  threep_config_path: string;
+  profile_path: string;
+  deployment_mode: string | null;
+  applied_profile_id: string | null;
+  applied_profile_name: string | null;
+};
 export type ClaudeEnvState = {
   config_dir: string;
   settings_path: string;
@@ -2518,6 +2525,7 @@ export type CliProxyStatus = {
   base_origin: string | null;
   current_gateway_origin: string | null;
   applied_to_current_gateway: boolean | null;
+  desktop: ClaudeDesktopConfigStatus | null;
 };
 export type CliSessionsDisplayContentBlock =
   | { type: "text"; text: string }
@@ -3230,6 +3238,15 @@ export type ModelRedirect = {
 };
 export type NoticeLevel = "info" | "success" | "warning" | "error";
 export type NoticeSendInput = { level: NoticeLevel; title: string | null; body: string };
+export type OAuthQuotaEstimate = {
+  used_usd: number | null;
+  estimated_total_usd: number | null;
+  estimated_remaining_usd: number | null;
+  window_start: number;
+  window_end: number;
+  sample_count: number;
+  unpriced_count: number;
+};
 export type PluginAuditLog = {
   id: number;
   plugin_id: string | null;
@@ -3741,6 +3758,12 @@ export type ProviderOAuthLimitsResult = {
   limit_5h_remaining_percent: number | null;
   limit_weekly_remaining_percent: number | null;
   routing_limited: boolean;
+  quota_estimates: ProviderOAuthQuotaEstimates | null;
+  limit_window_seconds: [number | null, number | null];
+};
+export type ProviderOAuthQuotaEstimates = {
+  short: OAuthQuotaEstimate | null;
+  weekly: OAuthQuotaEstimate | null;
 };
 export type ProviderOAuthRefreshResult = { success: boolean; expires_at: number | null };
 export type ProviderOAuthResetCodexQuotaResult = {

@@ -8,6 +8,7 @@ import {
   dataManagementKeys,
   gatewayKeys,
   modelPricesKeys,
+  oauthLimitsKeys,
   providersKeys,
   requestLogsKeys,
   settingsKeys,
@@ -32,6 +33,55 @@ vi.mock("../../services/app/dataManagement", async () => {
 describe("query/dataManagement", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("clearing request logs removes estimates for every provider and rejects late old queries", async () => {
+    setTauriRuntime();
+    vi.mocked(requestLogsClearAll).mockResolvedValue({ request_logs_deleted: 3 });
+    const client = createTestQueryClient();
+    const oldLimits = {
+      limit_5h_text: "75%",
+      quota_estimates: {
+        short: {
+          used_usd: 1,
+          estimated_total_usd: 20,
+          estimated_remaining_usd: 15,
+          window_start: 1_800_000_000,
+          window_end: 1_800_018_000,
+          sample_count: 3,
+          unpriced_count: 0,
+        },
+        weekly: null,
+      },
+    };
+    client.setQueryData(oauthLimitsKeys.detail(11), oldLimits);
+    client.setQueryData(oauthLimitsKeys.detail(12), oldLimits);
+    let resolveStale!: (value: typeof oldLimits) => void;
+    const inFlight = client
+      .fetchQuery({
+        queryKey: oauthLimitsKeys.detail(11),
+        queryFn: () =>
+          new Promise<typeof oldLimits>((resolve) => {
+            resolveStale = resolve;
+          }),
+        staleTime: 0,
+      })
+      .catch(() => null);
+    const { result } = renderHook(() => useRequestLogsClearAllMutation(), {
+      wrapper: createQueryWrapper(client),
+    });
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+    resolveStale(oldLimits);
+    await inFlight;
+    for (const id of [11, 12]) {
+      expect(client.getQueryData(oauthLimitsKeys.detail(id))).toEqual({
+        ...oldLimits,
+        quota_estimates: null,
+      });
+      expect(client.getQueryState(oauthLimitsKeys.detail(id))?.isInvalidated).toBe(true);
+    }
   });
 
   it("calls dbDiskUsageGet with tauri runtime", async () => {

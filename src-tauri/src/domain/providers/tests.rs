@@ -694,6 +694,47 @@ fn upsert_oauth_provider_drops_submitted_base_urls() {
 }
 
 #[test]
+fn upsert_preserves_oauth_sampling_until_auth_mode_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::db::init_for_tests(&dir.path().join("auth-mode-cost.db")).unwrap();
+    let saved = upsert(&db, default_provider_params("auth-mode-cost")).unwrap();
+    let read_sampling = || {
+        db.open_connection()
+            .unwrap()
+            .query_row(
+                "SELECT oauth_cost_start_at, oauth_quota_baselines_json FROM providers WHERE id = ?1",
+                [saved.id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .unwrap()
+    };
+    let baseline = r#"{"short":null,"weekly":null}"#;
+    for next_mode in [ProviderAuthMode::Oauth, ProviderAuthMode::ApiKey] {
+        db.open_connection()
+            .unwrap()
+            .execute(
+                "UPDATE providers SET oauth_cost_start_at = 123, oauth_quota_baselines_json = ?2 WHERE id = ?1",
+                rusqlite::params![saved.id, baseline],
+            )
+            .unwrap();
+        let mut params = default_provider_params("renamed");
+        params.provider_id = Some(saved.id);
+        params.auth_mode = None;
+        upsert(&db, params).unwrap();
+        assert_eq!(read_sampling(), (123, Some(baseline.to_string())));
+
+        let mut params = default_provider_params("changed-auth");
+        params.provider_id = Some(saved.id);
+        params.auth_mode = Some(next_mode);
+        let before = crate::shared::time::now_unix_seconds();
+        upsert(&db, params).unwrap();
+        let (start, sample) = read_sampling();
+        assert!(start > before);
+        assert!(sample.is_none());
+    }
+}
+
+#[test]
 fn upsert_accepts_grok_api_key_provider() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("providers_grok_api_key.db");
@@ -727,6 +768,24 @@ fn upsert_accepts_grok_oauth_provider() {
     assert_eq!(saved.cli_key, "grok");
     assert_eq!(saved.auth_mode, ProviderAuthMode::Oauth.as_str());
     assert!(saved.base_urls.is_empty());
+}
+
+#[test]
+fn upsert_rejects_claude_desktop_oauth_provider() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("providers_desktop_oauth.db");
+    let db = crate::db::init_for_tests(&db_path).expect("init db");
+
+    let mut params = default_provider_params("desktop-oauth");
+    params.cli_key = "claude_desktop".to_string();
+    params.auth_mode = Some(ProviderAuthMode::Oauth);
+    params.api_key = None;
+
+    let error = upsert(&db, params).expect_err("Desktop OAuth must be rejected");
+
+    assert!(error
+        .to_string()
+        .contains("oauth is not supported for cli_key=claude_desktop"));
 }
 
 #[test]
@@ -903,11 +962,41 @@ fn delete_removes_provider_request_logs_when_requested() {
         upsert(&db, default_provider_params("delete-clear-other")).expect("save other provider");
     seed_usage_request_log(&db, "trace-delete-clear", saved.id);
     seed_usage_request_log(&db, "trace-delete-other", other.id);
+    {
+        let conn = db.open_connection().unwrap();
+        conn.execute(
+            "UPDATE providers SET auth_mode = 'oauth', oauth_quota_baselines_json = '{\"short\":null,\"weekly\":null}'
+             WHERE id = ?1", [other.id],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO provider_oauth_limit_snapshots(provider_id, checked_at, updated_at, revision)
+             VALUES (?1, 1, 1, 3)", [other.id],
+        ).unwrap();
+        conn.execute(
+            "UPDATE request_logs SET cost_source_provider_id = ?1 WHERE trace_id = 'trace-delete-clear'",
+            [other.id],
+        ).unwrap();
+    }
 
     delete(&db, saved.id, true).expect("delete provider");
 
     assert!(!request_log_exists(&db, "trace-delete-clear"));
     assert!(request_log_exists(&db, "trace-delete-other"));
+    let (baseline, revision): (Option<String>, i64) = db
+        .open_connection()
+        .unwrap()
+        .query_row(
+            "SELECT p.oauth_quota_baselines_json, s.revision FROM providers p
+         JOIN provider_oauth_limit_snapshots s ON p.id = s.provider_id WHERE p.id = ?1",
+            [other.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert!(
+        baseline.is_none(),
+        "deleting bridge costs invalidates the source's sample"
+    );
+    assert_eq!(revision, 4);
 }
 
 fn create_oauth_provider_for_cas_test(db: &crate::db::Db, name: &str) -> i64 {
@@ -1080,6 +1169,15 @@ fn update_oauth_tokens_cas_rejects_stale_writer() {
     let db = crate::db::init_for_tests(&db_path).expect("init db");
 
     let provider_id = create_oauth_provider_for_cas_test(&db, "oauth-cas-stale");
+    let baseline = r#"{"short":null,"weekly":null}"#;
+    db.open_connection()
+        .unwrap()
+        .execute(
+            "UPDATE providers SET oauth_cost_start_at = 1, oauth_quota_baselines_json = ?2 WHERE id = ?1",
+            rusqlite::params![provider_id, baseline],
+        )
+        .unwrap();
+    let login_started_at = crate::shared::time::now_unix_seconds();
     update_oauth_tokens(
         &db,
         provider_id,
@@ -1099,6 +1197,33 @@ fn update_oauth_tokens_cas_rejects_stale_writer() {
     let details = get_oauth_details(&db, provider_id).expect("get oauth details");
     let expected_last_refreshed_at = details.oauth_last_refreshed_at;
     assert!(expected_last_refreshed_at.is_some());
+    let read_sampling = || {
+        db.open_connection()
+            .unwrap()
+            .query_row(
+                "SELECT oauth_cost_start_at, oauth_quota_baselines_json FROM providers WHERE id = ?1",
+                [provider_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .unwrap()
+    };
+    let (login_cost_start, sample) = read_sampling();
+    assert!(
+        sample.is_none(),
+        "explicit login clears the old quota sample"
+    );
+    assert!(login_cost_start > login_started_at);
+    assert_eq!(
+        Some(login_cost_start),
+        expected_last_refreshed_at.map(|at| at + 1)
+    );
+    db.open_connection()
+        .unwrap()
+        .execute(
+            "UPDATE providers SET oauth_quota_baselines_json = ?2 WHERE id = ?1",
+            rusqlite::params![provider_id, baseline],
+        )
+        .unwrap();
 
     let first = update_oauth_tokens_if_last_refreshed_matches(
         &db,
@@ -1139,6 +1264,16 @@ fn update_oauth_tokens_cas_rejects_stale_writer() {
     let after = get_oauth_details(&db, provider_id).expect("get oauth details after cas");
     assert_eq!(after.oauth_access_token, "access_first");
     assert_eq!(after.oauth_refresh_token.as_deref(), Some("refresh_first"));
+    assert_eq!(
+        read_sampling(),
+        (login_cost_start, Some(baseline.to_string())),
+        "token rotation must preserve the login cost boundary and quota sample"
+    );
+    clear_oauth(&db, provider_id).unwrap();
+    assert!(
+        read_sampling().1.is_none(),
+        "disconnect clears the quota sample"
+    );
 }
 
 #[test]

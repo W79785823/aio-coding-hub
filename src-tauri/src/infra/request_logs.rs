@@ -434,15 +434,61 @@ pub fn purge_expired(db: &db::Db, retention_days: u32, now_unix: i64) -> AppResu
     loop {
         // Re-acquire per batch so the pooled connection (pool max is small) is
         // not held across the inter-batch pauses of a long purge.
-        let conn = db.open_connection()?;
-        let deleted = conn
+        let mut conn = db.open_connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| db_err!("failed to start request-log retention: {e}"))?;
+        let affected_providers: Vec<i64> = {
+            let mut stmt = tx.prepare(
+                "WITH expired AS (
+                   SELECT final_provider_id, cost_source_provider_id, created_at,
+                     excluded_from_stats, status, error_code,
+                     COALESCE(NULLIF(created_at_ms, 0), created_at * 1000)
+                       + COALESCE(duration_ms, 0) AS completed_at_ms
+                   FROM request_logs WHERE created_at < ?1
+                   ORDER BY created_at, id LIMIT ?2
+                 )
+                 SELECT DISTINCT p.id FROM expired l JOIN providers p
+                   ON p.id = l.final_provider_id OR p.id = l.cost_source_provider_id
+                 WHERE p.auth_mode = 'oauth'
+                   AND l.created_at >= COALESCE(p.oauth_cost_start_at, 0)
+                   AND l.excluded_from_stats = 0 AND l.status >= 200 AND l.status < 300
+                   AND l.error_code IS NULL
+                   AND (
+                     p.oauth_quota_baselines_json IS NULL
+                     OR l.completed_at_ms >= COALESCE(json_extract(p.oauth_quota_baselines_json, '$.short.sample_start_at_ms'),
+                                    json_extract(p.oauth_quota_baselines_json, '$.short.sample_start_at') * 1000,
+                                    9223372036854775807)
+                     OR l.completed_at_ms >= COALESCE(json_extract(p.oauth_quota_baselines_json, '$.weekly.sample_start_at_ms'),
+                                    json_extract(p.oauth_quota_baselines_json, '$.weekly.sample_start_at') * 1000,
+                                    9223372036854775807)
+                   )",
+            ).map_err(|e| db_err!("failed to prepare expired quota samples: {e}"))?;
+            let rows = stmt
+                .query_map(params![cutoff, RETENTION_PURGE_BATCH_SIZE as i64], |row| {
+                    row.get(0)
+                })
+                .map_err(|e| db_err!("failed to query expired quota samples: {e}"))?;
+            rows.collect::<Result<_, _>>()
+                .map_err(|e| db_err!("failed to read expired quota samples: {e}"))?
+        };
+        let deleted = tx
             .execute(
                 "DELETE FROM request_logs WHERE id IN (
-                   SELECT id FROM request_logs WHERE created_at < ?1 LIMIT ?2
+                   SELECT id FROM request_logs WHERE created_at < ?1
+                   ORDER BY created_at, id LIMIT ?2
                  )",
                 params![cutoff, RETENTION_PURGE_BATCH_SIZE as i64],
             )
             .map_err(|e| db_err!("failed to purge expired request_logs: {e}"))?;
+        for provider_id in affected_providers {
+            crate::domain::provider_oauth_quota_estimate::invalidate_sampling(
+                &tx,
+                Some(provider_id),
+            )?;
+        }
+        tx.commit()
+            .map_err(|e| db_err!("failed to commit request-log retention: {e}"))?;
         drop(conn);
         total = total.saturating_add(deleted as u64);
         if deleted < RETENTION_PURGE_BATCH_SIZE {
@@ -661,8 +707,9 @@ fn insert_batch_once(
 		  created_at,
 		  final_provider_id,
 		  provider_chain_json,
-		  error_details_json
-		) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)
+		  error_details_json,
+		  cost_source_provider_id
+		) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32)
 		ON CONFLICT(trace_id) DO UPDATE SET
 		  method = excluded.method,
 		  path = excluded.path,
@@ -698,6 +745,7 @@ fn insert_batch_once(
 		  activity_details_json = COALESCE(request_logs.activity_details_json, excluded.activity_details_json),
 		  created_at = CASE WHEN request_logs.created_at = 0 THEN excluded.created_at ELSE request_logs.created_at END,
 		  final_provider_id = excluded.final_provider_id,
+		  cost_source_provider_id = excluded.cost_source_provider_id,
 		  provider_chain_json = excluded.provider_chain_json,
 		  error_details_json = excluded.error_details_json
 		WHERE NOT (
@@ -843,6 +891,10 @@ fn insert_batch_once(
                 final_provider_id_db,
                 item.provider_chain_json,
                 item.error_details_json,
+                semantics::resolve_cx2cc_source_provider_id(
+                    item.special_settings_json.as_deref(),
+                    final_provider_id_db,
+                ),
             ])
             .map_err(|e| DbWriteError::from_rusqlite("failed to insert request_log", e))?;
         }
@@ -1599,6 +1651,47 @@ WHERE trace_id = ?1
     }
 
     #[test]
+    fn writer_updates_cost_source_with_final_attempt_and_keeps_request_start() {
+        let (app, db, _dir) = init_test_db();
+        let mut item = RequestLogInsert {
+            special_settings_json: Some(
+                serde_json::json!([{
+                    "type": "cx2cc_cost_basis",
+                    "bridge_provider_id": 12,
+                    "source_provider_id": 42,
+                }])
+                .to_string(),
+            ),
+            ..request_log_insert("trace-cost-source")
+        };
+        let started_at = item.created_at;
+        let mut cache = InsertBatchCache::default();
+        for (final_provider, source) in [(12, Some(42)), (13, None), (12, Some(42))] {
+            item.attempts_json = serde_json::json!([{
+                "provider_id": final_provider,
+                "provider_name": "final",
+                "outcome": "success",
+                "status": 200,
+            }])
+            .to_string();
+            insert_batch_once(app.handle(), &db, std::slice::from_ref(&item), &mut cache).unwrap();
+            let actual: (i64, Option<i64>, i64) = db
+                .open_connection()
+                .unwrap()
+                .query_row(
+                    "SELECT final_provider_id, cost_source_provider_id, created_at
+                     FROM request_logs WHERE trace_id = 'trace-cost-source'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(actual, (final_provider, source, started_at));
+            item.created_at += 10;
+            item.created_at_ms += 10_000;
+        }
+    }
+
+    #[test]
     fn effective_cost_basis_uses_redirect_from_final_provider_only() {
         let settings = serde_json::json!([
             {
@@ -1614,7 +1707,7 @@ WHERE trace_id = ?1
         ])
         .to_string();
 
-        for cli_key in ["claude", "codex", "gemini", "grok"] {
+        for cli_key in ["claude", "codex", "gemini", "grok", "claude_desktop"] {
             let matched =
                 effective_cost_basis(cli_key, Some("gpt-5.6-luna"), Some(&settings), Some(8))
                     .expect("matched cost basis");

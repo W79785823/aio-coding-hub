@@ -147,6 +147,26 @@ fn generate_redeem_request_id() -> String {
     )
 }
 
+fn reset_codex_sampling(
+    db: &crate::db::Db,
+    provider_id: i64,
+    expected_account_id: &str,
+) -> crate::shared::error::AppResult<crate::providers::ProviderOAuthDetails> {
+    let mut conn = db.open_connection()?;
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| crate::shared::error::db_err!("failed to start quota sampling reset: {e}"))?;
+    let details = crate::providers::get_oauth_details_with_conn(&tx, provider_id)?;
+    validate_codex_reset_details(&details)?;
+    if codex_reset_account_id(&details)? != expected_account_id {
+        return Err("OAUTH_QUOTA_STALE_TOKEN: OAuth account changed while resetting quota".into());
+    }
+    crate::domain::provider_oauth_quota_estimate::invalidate_sampling(&tx, Some(provider_id))?;
+    tx.commit()
+        .map_err(|e| crate::shared::error::db_err!("failed to commit quota sampling reset: {e}"))?;
+    Ok(details)
+}
+
 async fn consume_codex_reset_credit_and_refresh(
     db: &crate::db::Db,
     client: &reqwest::Client,
@@ -197,6 +217,14 @@ async fn consume_codex_reset_credit_and_refresh(
         .map_err(|e| format!("codex reset parse failed: {e}"))?;
 
     let refreshed = async {
+        *details = blocking::run("oauth_quota_reset_sampling", {
+            let db = db.clone();
+            let account_id = chatgpt_account_id.clone();
+            move || reset_codex_sampling(&db, provider_id, &account_id)
+        })
+        .await
+        .map_err(Into::<String>::into)?;
+        let access_token = limits::effective_oauth_access_token(details, adapter)?;
         let revision = limits::read_snapshot_revision(db, provider_id).await?;
         let refreshed_limits = fetch_codex_usage_limits(
             client,
@@ -299,6 +327,10 @@ pub(crate) async fn provider_oauth_reset_codex_quota(
             .clone()
             .map(|error| (details.oauth_access_token.clone(), Err(error))),
     };
+    drop(quota_guard);
+    if let Some(ref mut refreshed_limits) = result.refreshed_limits {
+        limits::attach_quota_estimates(&db, provider_id, refreshed_limits).await;
+    }
     Ok(result)
 }
 
@@ -314,6 +346,155 @@ mod tests {
     use axum::routing::{get, post};
     use axum::Router;
     use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn consumed_reset_invalidates_sampling_after_token_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::init_for_tests(&dir.path().join("review-rotation.db")).unwrap();
+        seed_quota_sample(&db);
+        let mut details = codex_details(1);
+        details.oauth_id_token = Some(account_id_token("same-account"));
+        db.open_connection().unwrap().execute(
+            "UPDATE providers SET oauth_id_token = ?1, oauth_last_refreshed_at = 1 WHERE id = 1",
+            [details.oauth_id_token.as_deref()],
+        ).unwrap();
+        let (mut endpoints, requests) = start_quota_server(StatusCode::OK).await;
+        let rotated_db = db.clone();
+        let id_token = details.oauth_id_token.clone();
+        let router = Router::new().route(
+            "/consume",
+            post(move || {
+                let db = rotated_db.clone();
+                let id_token = id_token.clone();
+                async move {
+                    // Ordinary refresh can persist while the quota-reset HTTP call
+                    // is in flight; refresh_loop does not acquire the quota lock.
+                    assert!(
+                        crate::providers::update_oauth_tokens_if_last_refreshed_matches(
+                            &db,
+                            1,
+                            "oauth",
+                            "codex_oauth",
+                            "rotated-token",
+                            Some("rotated-refresh"),
+                            id_token.as_deref(),
+                            "https://auth.openai.com/oauth/token",
+                            "client-id",
+                            None,
+                            Some(crate::shared::time::now_unix_seconds() + 3600),
+                            None,
+                            Some(1),
+                        )
+                        .unwrap()
+                    );
+                    axum::Json(serde_json::json!({"code": "ok", "windows_reset": 2}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        endpoints.reset_url = format!("http://{}/consume", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let (result, revision) =
+            consume_codex_reset_credit_and_refresh(&db, &client, &endpoints, &mut details)
+                .await
+                .unwrap();
+        server.abort();
+        assert!(result.success, "the quota credit was consumed");
+        let baseline: Option<String> = db
+            .open_connection()
+            .unwrap()
+            .query_row(
+                "SELECT oauth_quota_baselines_json FROM providers WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            baseline.is_none(),
+            "same-account token rotation must not leave the consumed reset's old baseline behind; refresh_error={:?}",
+            result.refresh_error
+        );
+        assert!(result.refresh_error.is_none());
+        assert!(result.refreshed_limits.is_some());
+        assert_eq!(revision, Some(4));
+        assert_eq!(details.oauth_access_token, "rotated-token");
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].authorization.as_deref(),
+            Some("Bearer rotated-token")
+        );
+        assert_eq!(requests[0].account_id.as_deref(), Some("same-account"));
+    }
+
+    #[tokio::test]
+    async fn consumed_reset_does_not_clear_another_accounts_sampling() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::init_for_tests(&dir.path().join("reset-account-change.db")).unwrap();
+        seed_quota_sample(&db);
+        let mut details = codex_details(1);
+        details.oauth_id_token = Some(account_id_token("acct_123"));
+        let (mut endpoints, requests) = start_quota_server(StatusCode::OK).await;
+        let changed_db = db.clone();
+        let router = Router::new().route("/consume", post(move || {
+            let db = changed_db.clone();
+            async move {
+                crate::providers::update_oauth_tokens(
+                    &db, 1, "oauth", "codex_oauth", "other-token",
+                    Some("other-refresh"), Some(&account_id_token("other-account")),
+                    "https://auth.openai.com/oauth/token", "client-id",
+                    None, None, None,
+                ).unwrap();
+                db.open_connection().unwrap().execute(
+                    "UPDATE providers SET oauth_quota_baselines_json = '{\"short\":null,\"weekly\":null}' WHERE id = 1",
+                    [],
+                ).unwrap();
+                axum::Json(serde_json::json!({"code": "ok", "windows_reset": 2}))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        endpoints.reset_url = format!("http://{}/consume", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let (result, revision) =
+            consume_codex_reset_credit_and_refresh(&db, &client, &endpoints, &mut details)
+                .await
+                .unwrap();
+        server.abort();
+        assert!(
+            result.success,
+            "the original account's credit was already consumed"
+        );
+        assert!(result
+            .refresh_error
+            .unwrap()
+            .contains("OAUTH_QUOTA_STALE_TOKEN"));
+        assert!(result.refreshed_limits.is_none());
+        assert_eq!(revision, None);
+        assert_eq!(limits::read_snapshot_revision(&db, 1).await.unwrap(), 3);
+        let baseline: Option<String> = db
+            .open_connection()
+            .unwrap()
+            .query_row(
+                "SELECT oauth_quota_baselines_json FROM providers WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            baseline.as_deref(),
+            Some("{\"short\":null,\"weekly\":null}")
+        );
+        assert!(
+            requests.lock().unwrap().is_empty(),
+            "do not fetch another account's usage"
+        );
+    }
 
     #[derive(Debug, Clone)]
     struct CapturedRequest {
@@ -369,6 +550,28 @@ mod tests {
                     .to_string()
             )
         )
+    }
+
+    fn seed_quota_sample(db: &crate::db::Db) {
+        db.open_connection()
+            .unwrap()
+            .execute_batch(
+                r#"INSERT INTO providers(id, cli_key, name, base_url, api_key_plaintext,
+                   created_at, updated_at, auth_mode, oauth_provider_type, oauth_access_token,
+                   oauth_quota_baselines_json)
+                   VALUES (1, 'codex', 'reset', '', '', 1, 1, 'oauth', 'codex_oauth', 'access-token',
+                     '{"short":{"window_start":1,"window_end":18001,"sample_start_at":2,"used_percent":20},"weekly":null}');
+                   INSERT INTO provider_oauth_limit_snapshots(provider_id, checked_at, updated_at, revision)
+                   VALUES (1, 1, 1, 3);"#,
+            )
+            .unwrap();
+        db.open_connection()
+            .unwrap()
+            .execute(
+                "UPDATE providers SET oauth_id_token = ?1 WHERE id = 1",
+                [account_id_token("acct_123")],
+            )
+            .unwrap();
     }
 
     async fn record_consume(
@@ -517,6 +720,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let db = crate::db::init_for_tests(&dir.path().join("reset.db")).expect("init db");
+        seed_quota_sample(&db);
         let mut details = codex_details(1);
         details.oauth_id_token = Some(account_id_token("acct_123"));
         let (result, _) =
@@ -533,6 +737,20 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("codex usage fetch status"));
+        let baseline: Option<String> = db
+            .open_connection()
+            .unwrap()
+            .query_row(
+                "SELECT oauth_quota_baselines_json FROM providers WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            baseline.is_none(),
+            "a consumed reset must discard the old sample even if refresh fails"
+        );
+        assert_eq!(limits::read_snapshot_revision(&db, 1).await.unwrap(), 4);
 
         let requests = requests.lock().expect("lock requests");
         assert_eq!(requests.len(), 2);
@@ -571,15 +789,17 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let db = crate::db::init_for_tests(&dir.path().join("reset.db")).expect("init db");
+        seed_quota_sample(&db);
         let mut details = codex_details(1);
         details.oauth_id_token = Some(account_id_token("acct_123"));
-        let (result, _) =
+        let (result, revision) =
             consume_codex_reset_credit_and_refresh(&db, &client, &endpoints, &mut details)
                 .await
                 .expect("reset success");
         let refreshed = result.refreshed_limits.expect("refreshed limits");
 
         assert!(result.success);
+        assert_eq!(revision, Some(4));
         assert_eq!(refreshed.limit_5h_text.as_deref(), Some("75%"));
         assert_eq!(refreshed.limit_weekly_text.as_deref(), Some("90%"));
         assert_eq!(refreshed.limit_5h_reset_at, Some(1_800));

@@ -1169,6 +1169,18 @@ fn validate_source_provider(
     }
 }
 
+// Claude Desktop has no OAuth adapter; its providers must use an API key.
+fn reject_unsupported_oauth(cli_key: &str, is_oauth: bool) -> crate::shared::error::AppResult<()> {
+    if is_oauth && cli_key == "claude_desktop" {
+        return Err(
+            "SEC_INVALID_INPUT: oauth is not supported for cli_key=claude_desktop"
+                .to_string()
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 pub fn upsert(
     db: &db::Db,
     input: ProviderUpsertParams,
@@ -1216,6 +1228,7 @@ pub fn upsert(
 
     let requested_auth_mode = auth_mode.unwrap_or(ProviderAuthMode::ApiKey);
     let is_oauth = requested_auth_mode == ProviderAuthMode::Oauth;
+    reject_unsupported_oauth(cli_key, is_oauth)?;
 
     if cli_key == "grok" && claude_models.as_ref().is_some_and(ClaudeModels::has_any) {
         return Err(
@@ -1485,6 +1498,10 @@ SET
   base_urls_json = ?3,
   base_url_mode = ?4,
   auth_mode = ?5,
+  oauth_cost_start_at = CASE WHEN auth_mode != ?5
+    THEN MAX(COALESCE(oauth_cost_start_at, 0), ?27 + 1) ELSE oauth_cost_start_at END,
+  oauth_quota_baselines_json = CASE WHEN auth_mode != ?5
+    THEN NULL ELSE oauth_quota_baselines_json END,
   claude_models_json = ?6,
   model_policy_json = ?7,
   supported_models_json = ?8,
@@ -1627,6 +1644,7 @@ pub fn duplicate(
 
     let requested_auth_mode = auth_mode.unwrap_or(ProviderAuthMode::ApiKey);
     let is_oauth = requested_auth_mode == ProviderAuthMode::Oauth;
+    reject_unsupported_oauth(cli_key, is_oauth)?;
     if let Some(ref bt) = bridge_type {
         if bt != CX2CC_BRIDGE_TYPE {
             return Err(format!("SEC_INVALID_INPUT: unsupported bridge_type: {bt}").into());
@@ -1767,6 +1785,26 @@ pub fn delete(
     }
 
     if clear_usage_stats {
+        let sources = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT DISTINCT cost_source_provider_id FROM request_logs
+                     WHERE final_provider_id = ?1 AND cost_source_provider_id IS NOT NULL
+                       AND cost_source_provider_id != ?1",
+                )
+                .map_err(|e| db_err!("failed to prepare deleted provider cost sources: {e}"))?;
+            let rows = stmt
+                .query_map([provider_id], |row| row.get::<_, i64>(0))
+                .map_err(|e| db_err!("failed to query deleted provider cost sources: {e}"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| db_err!("failed to read deleted provider cost sources: {e}"))?
+        };
+        for source_id in sources {
+            crate::domain::provider_oauth_quota_estimate::invalidate_sampling(
+                &tx,
+                Some(source_id),
+            )?;
+        }
         tx.execute(
             "DELETE FROM request_logs WHERE final_provider_id = ?1",
             params![provider_id],
@@ -2016,6 +2054,8 @@ UPDATE providers SET
   oauth_expires_at = ?9,
   oauth_email = ?10,
   oauth_last_refreshed_at = ?11,
+  oauth_cost_start_at = MAX(COALESCE(oauth_cost_start_at, 0), ?11 + 1),
+  oauth_quota_baselines_json = NULL,
   oauth_last_error = NULL,
   updated_at = ?11
 WHERE id = ?12
@@ -2119,6 +2159,7 @@ UPDATE providers SET
   auth_mode = 'api_key',
   oauth_provider_type = NULL,
   oauth_access_token = NULL,
+  oauth_quota_baselines_json = NULL,
   oauth_refresh_token = NULL,
   oauth_id_token = NULL,
   oauth_token_uri = NULL,
@@ -2160,6 +2201,13 @@ pub(crate) fn get_oauth_details(
     provider_id: i64,
 ) -> crate::shared::error::AppResult<ProviderOAuthDetails> {
     let conn = db.open_connection()?;
+    get_oauth_details_with_conn(&conn, provider_id)
+}
+
+pub(crate) fn get_oauth_details_with_conn(
+    conn: &Connection,
+    provider_id: i64,
+) -> crate::shared::error::AppResult<ProviderOAuthDetails> {
     conn.query_row(
         r#"
 SELECT id, cli_key, oauth_provider_type, oauth_access_token, oauth_refresh_token,
