@@ -1337,7 +1337,10 @@ mod tests {
                 let _ = socket.shutdown().await;
             }
         });
-        let response = reqwest::Client::new()
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("build local test client")
             .get(format!("http://{addr}/ok"))
             .send()
             .await
@@ -1364,7 +1367,10 @@ mod tests {
             let _ = socket.write_all(&sent_body).await;
             let _ = socket.shutdown().await;
         });
-        let response = reqwest::Client::new()
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("build local test client")
             .get(format!("http://{addr}/ok"))
             .send()
             .await
