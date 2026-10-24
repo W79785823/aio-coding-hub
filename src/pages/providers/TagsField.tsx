@@ -30,6 +30,9 @@ export function TagsField(props: {
             </span>
           ))}
           <input
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             id={fieldId}
             aria-label="标签"
             type="text"

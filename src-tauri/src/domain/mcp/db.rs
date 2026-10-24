@@ -121,23 +121,17 @@ fn normalize_optional_text<'a>(
     Ok(Some(value))
 }
 
-fn normalize_args(args: Vec<String>) -> crate::shared::error::AppResult<Vec<String>> {
-    let mut normalized = Vec::new();
-    for arg in args {
-        let trimmed = arg.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if normalized.len() >= MCP_ARGS_MAX_COUNT {
-            return Err(format!(
-                "SEC_INVALID_INPUT: args must contain at most {MCP_ARGS_MAX_COUNT} entries"
-            )
-            .into());
-        }
-        validate_text_len("args entry", trimmed, MCP_ARG_MAX_LEN)?;
-        normalized.push(trimmed.to_string());
+fn validate_args(args: &[String]) -> crate::shared::error::AppResult<()> {
+    if args.len() > MCP_ARGS_MAX_COUNT {
+        return Err(format!(
+            "SEC_INVALID_INPUT: args must contain at most {MCP_ARGS_MAX_COUNT} entries"
+        )
+        .into());
     }
-    Ok(normalized)
+    for arg in args {
+        validate_text_len("args entry", arg, MCP_ARG_MAX_LEN)?;
+    }
+    Ok(())
 }
 
 fn normalize_patch_preserve_keys(
@@ -397,7 +391,7 @@ pub fn upsert(
         return Err(format!("SEC_INVALID_INPUT: {transport} url is required").into());
     }
 
-    let args = normalize_args(args)?;
+    validate_args(&args)?;
 
     let mut conn = db.open_connection()?;
     let now = now_unix_seconds();
@@ -682,10 +676,10 @@ pub(super) fn upsert_by_name(
         .into());
     }
 
-    let args = normalize_args(input.args.clone())?;
+    validate_args(&input.args)?;
     let env = normalize_patch_replace(input.env.clone(), "env")?;
     let headers = normalize_patch_replace(input.headers.clone(), "headers")?;
-    let args_json = args_to_json(&args)?;
+    let args_json = args_to_json(&input.args)?;
     let env_json = map_to_json(&env, "env")?;
     let headers_json = map_to_json(&headers, "headers")?;
 
@@ -793,19 +787,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_args_trims_filters_and_caps_entries() {
-        let normalized =
-            normalize_args(vec!["  --flag  ".to_string(), "   ".to_string()]).expect("args");
-        assert_eq!(normalized, vec!["--flag"]);
+    fn validate_args_accepts_literal_values_and_caps_entries() {
+        let args = vec![
+            "  lowercase \"quoted\" 'single' -- ...  ".to_string(),
+            " \t ".to_string(),
+            String::new(),
+        ];
+        validate_args(&args).expect("literal args");
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&args_to_json(&args).expect("serialize args"))
+                .expect("deserialize args"),
+            args
+        );
+        validate_args(&[]).expect("no args");
+        validate_args(&vec![String::new(); MCP_ARGS_MAX_COUNT]).expect("max args");
+        validate_args(&[" ".repeat(MCP_ARG_MAX_LEN)]).expect("max arg length");
 
-        let too_many = (0..=MCP_ARGS_MAX_COUNT)
-            .map(|index| format!("arg-{index}"))
-            .collect();
-        let err = normalize_args(too_many).expect_err("too many args should fail");
+        let too_many = vec![String::new(); MCP_ARGS_MAX_COUNT + 1];
+        let err = validate_args(&too_many).expect_err("too many args should fail");
         assert!(err.to_string().contains("args must contain at most"));
 
-        let err =
-            normalize_args(vec!["x".repeat(MCP_ARG_MAX_LEN + 1)]).expect_err("long arg fails");
+        let err = validate_args(&[" ".repeat(MCP_ARG_MAX_LEN + 1)]).expect_err("long arg fails");
         assert!(err.to_string().contains("args entry too long"));
     }
 

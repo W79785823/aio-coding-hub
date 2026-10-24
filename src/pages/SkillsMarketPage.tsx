@@ -107,6 +107,9 @@ function SkillsMarketFilters({ model }: { model: SkillsMarketModel }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <input
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="搜索技能、仓库、目录"
@@ -475,6 +478,9 @@ function SkillsMarketRepoDialog({ model }: { model: SkillsMarketModel }) {
                 Git URL
               </label>
               <input
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 id="skills-market-new-repo-url"
                 value={newRepoUrl}
                 onChange={(e) => setNewRepoUrl(e.target.value)}
@@ -490,6 +496,9 @@ function SkillsMarketRepoDialog({ model }: { model: SkillsMarketModel }) {
                 Branch
               </label>
               <input
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 id="skills-market-new-repo-branch"
                 value={newRepoBranch}
                 onChange={(e) => setNewRepoBranch(e.target.value)}

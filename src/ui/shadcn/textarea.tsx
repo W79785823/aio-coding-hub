@@ -7,6 +7,9 @@ export type TextareaProps = React.ComponentPropsWithRef<"textarea"> & {
 export function Textarea({ className, mono, ref, ...props }: TextareaProps) {
   return (
     <textarea
+      autoCapitalize="off"
+      autoCorrect="off"
+      spellCheck={false}
       ref={ref}
       className={cn(
         "w-full resize-y rounded-lg border border-line bg-surface-inset px-3 py-2 text-sm text-foreground outline-none transition-colors",

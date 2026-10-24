@@ -159,6 +159,9 @@ export function PluginMarketPanel({
               <label className="grid gap-1 text-xs text-muted-foreground">
                 市场索引 URL
                 <input
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
                   className="rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
                   value={indexUrl}
                   onChange={(event) => dispatch({ type: "setIndexUrl", value: event.target.value })}
@@ -168,6 +171,9 @@ export function PluginMarketPanel({
               <label className="grid gap-1 text-xs text-muted-foreground">
                 索引签名
                 <input
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
                   className="rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
                   value={signature}
                   onChange={(event) =>
@@ -181,6 +187,9 @@ export function PluginMarketPanel({
             <label className="grid gap-1 text-xs text-muted-foreground">
               市场索引 JSON
               <textarea
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 className="min-h-24 rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs text-foreground"
                 value={indexJson}
                 onChange={(event) => dispatch({ type: "setIndexJson", value: event.target.value })}

@@ -238,7 +238,7 @@ describe("services/workspace/mcp", () => {
         name: "Fetch",
         transport: "stdio",
         command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-fetch"],
+        args: [" -y ", " @modelcontextprotocol/server-fetch "],
         env: { TOKEN: " secret " },
         cwd: "/tmp",
         url: null,
@@ -276,6 +276,62 @@ describe("services/workspace/mcp", () => {
       },
     ]);
   });
+
+  it("preserves literal args through save and import payloads", async () => {
+    const args = ["", "  lowercase \"quoted\" 'single' -- ...  ", " \t ", "--flag"];
+    vi.mocked(commands.mcpServerUpsert).mockResolvedValueOnce({
+      status: "ok",
+      data: makeMcpServerSummary({ args }),
+    });
+    vi.mocked(commands.mcpImportServers).mockResolvedValueOnce({
+      status: "ok",
+      data: makeMcpImportReport({ inserted: 1 }),
+    });
+
+    await mcpServerUpsert({
+      name: "Literal args",
+      transport: "stdio",
+      command: "node",
+      args,
+      env: { preserveKeys: [" TOKEN "], replace: {} },
+    });
+    expect(commands.mcpServerUpsert).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        args,
+        env: { preserveKeys: ["TOKEN"], replace: {} },
+      })
+    );
+
+    await mcpImportServers({
+      workspaceId: 1,
+      servers: [makeMcpImportServer({ transport: "stdio", command: "node", args })],
+    });
+    expect(commands.mcpImportServers).toHaveBeenLastCalledWith({
+      workspaceId: 1,
+      servers: [expect.objectContaining({ args })],
+    });
+  });
+
+  it.each([{ args: "--flag" }, { args: [42] }])(
+    "rejects invalid args before IPC: $args",
+    async ({ args }) => {
+      const invalidArgs = args as unknown as string[];
+      await expect(
+        mcpServerUpsert({
+          name: "Invalid args",
+          transport: "stdio",
+          command: "node",
+          args: invalidArgs,
+        })
+      ).rejects.toThrow("SEC_INVALID_INPUT: args");
+      expect(() =>
+        normalizeMcpImportServers([
+          makeMcpImportServer({ transport: "stdio", command: "node", args: invalidArgs }),
+        ])
+      ).toThrow("SEC_INVALID_INPUT: servers[0].args");
+      expect(commands.mcpServerUpsert).not.toHaveBeenCalled();
+    }
+  );
 
   it("rejects invalid ids and oversized import batches before invoking generated commands", async () => {
     expect(validateMcpWorkspaceId(7)).toBe(7);

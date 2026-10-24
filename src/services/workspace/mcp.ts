@@ -109,12 +109,17 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
   return normalized ? normalized : null;
 }
 
-function normalizeStringArray(values: readonly string[] | undefined, label: string): string[] {
+function validateStringArray(values: readonly string[] | undefined, label: string): string[] {
   if (!values) return [];
   if (!Array.isArray(values)) {
     throw new Error(`SEC_INVALID_INPUT: ${label} must be an array`);
   }
-  return values.map((value) => normalizeRequiredText(value, label));
+  return values.map((value) => {
+    if (typeof value !== "string") {
+      throw new Error(`SEC_INVALID_INPUT: ${label} entries must be strings`);
+    }
+    return value;
+  });
 }
 
 function normalizeStringRecord(
@@ -162,7 +167,9 @@ function normalizeSecretPatchInput(
 
   if (hasPatchShape) {
     return {
-      preserveKeys: normalizeStringArray(patchInput.preserveKeys ?? [], "preserveKeys"),
+      preserveKeys: validateStringArray(patchInput.preserveKeys ?? [], "preserveKeys").map((key) =>
+        normalizeRequiredText(key, "preserveKeys")
+      ),
       replace: normalizeStringRecord(patchInput.replace ?? {}, "replace"),
     };
   }
@@ -223,7 +230,7 @@ function normalizeMcpImportServer(server: McpImportServer, index: number): McpIm
     name: normalizeRequiredText(server.name, `${label}.name`),
     transport,
     command: isStdio ? command : null,
-    args: isStdio ? normalizeStringArray(server.args, `${label}.args`) : [],
+    args: isStdio ? validateStringArray(server.args, `${label}.args`) : [],
     env: isStdio ? normalizeStringRecord(server.env, `${label}.env`) : {},
     cwd: isStdio ? normalizeOptionalText(server.cwd) : null,
     url: isStdio ? null : url,
@@ -283,7 +290,7 @@ export async function mcpServerUpsert(input: McpServerUpsertInput) {
     name: normalizeRequiredText(input.name, "name"),
     transport,
     command: isStdio ? command : null,
-    args: isStdio ? normalizeStringArray(input.args ?? [], "args") : [],
+    args: isStdio ? validateStringArray(input.args ?? [], "args") : [],
     env: isStdio ? normalizedEnv : { preserveKeys: [], replace: {} },
     cwd: isStdio ? normalizeOptionalText(input.cwd) : null,
     url: isStdio ? null : url,

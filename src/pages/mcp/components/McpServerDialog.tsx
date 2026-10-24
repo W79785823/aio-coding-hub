@@ -185,10 +185,7 @@ function buildSecretPatch(
 }
 
 function parseLines(text: string) {
-  return text.split("\n").flatMap((l) => {
-    const line = l.trim();
-    return line ? [line] : [];
-  });
+  return text === "" ? [] : text.split("\n");
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -389,6 +386,9 @@ function KeyValuePairEditor({
         <div key={pair.id} className="flex items-center gap-2">
           <input
             type="text"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             value={pair.key}
             onChange={(e) => updatePair(index, "key", e.currentTarget.value)}
             placeholder={keyPlaceholder}
@@ -398,6 +398,9 @@ function KeyValuePairEditor({
           <span className="text-xs text-muted-foreground select-none">=</span>
           <input
             type="text"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             value={pair.value}
             onChange={(e) => updatePair(index, "value", e.currentTarget.value)}
             placeholder={valuePlaceholder}
@@ -447,6 +450,9 @@ function McpJsonImportPanel({
         快速导入 JSON（可选）
       </label>
       <textarea
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
         id={jsonImportId}
         value={jsonText}
         onChange={(e) => updateFormDraft({ jsonText: e.currentTarget.value })}
@@ -543,6 +549,9 @@ function McpBasicInfoPanel({
         <input
           id={nameInputId}
           type="text"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
           value={name}
           onChange={(e) => updateFormDraft({ name: e.currentTarget.value })}
           placeholder="例如：Fetch 工具"
@@ -603,6 +612,9 @@ function McpStdioFields({
         <input
           id={commandInputId}
           type="text"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
           value={command}
           onChange={(e) => updateFormDraft({ command: e.currentTarget.value })}
           placeholder="例如：npx"
@@ -615,6 +627,9 @@ function McpStdioFields({
           Args（每行一个）
         </label>
         <textarea
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
           id={argsTextareaId}
           value={argsText}
           onChange={(e) => updateFormDraft({ args: parseLines(e.currentTarget.value) })}
@@ -648,6 +663,9 @@ function McpStdioFields({
         <input
           id={cwdInputId}
           type="text"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
           value={cwd}
           onChange={(e) => updateFormDraft({ cwd: e.currentTarget.value })}
           placeholder="例如：/Users/xxx/project"
@@ -680,6 +698,9 @@ function McpRemoteFields({
         <input
           id={urlInputId}
           type="text"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
           value={url}
           onChange={(e) => updateFormDraft({ url: e.currentTarget.value })}
           placeholder="例如：https://example.com/mcp"

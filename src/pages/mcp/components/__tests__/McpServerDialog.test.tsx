@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { useMcpServerUpsertMutation } from "../../../../query/mcp";
 import { mcpParseJson } from "../../../../services/workspace/mcp";
@@ -95,6 +96,36 @@ describe("pages/mcp/components/McpServerDialog", () => {
     );
 
     expect(screen.getByRole("button", { name: "保存中…" })).toBeDisabled();
+  });
+
+  it("preserves args while typing and saving, including whitespace and empty arguments", async () => {
+    const user = userEvent.setup();
+    const mutateAsync = vi.fn().mockResolvedValue(makeMcpServerSummary());
+    mockUpsertMutation(createUpsertMutation({ mutateAsync }));
+
+    render(
+      <McpServerDialog
+        workspaceId={1}
+        open={true}
+        editTarget={makeMcpServerSummary({ args: [] })}
+        onOpenChange={vi.fn()}
+      />
+    );
+
+    const args = screen.getByRole("textbox", { name: "Args（每行一个）" });
+    await user.type(args, "--flag{Enter}{Enter}  lowercase \"quoted\" 'single' -- ...  {Enter}");
+    expect(args).toHaveValue("--flag\n\n  lowercase \"quoted\" 'single' -- ...  \n");
+
+    await user.click(screen.getByRole("button", { name: "保存并同步" }));
+    expect(mutateAsync).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        args: ["--flag", "", "  lowercase \"quoted\" 'single' -- ...  ", ""],
+      })
+    );
+
+    await user.clear(args);
+    await user.click(screen.getByRole("button", { name: "保存并同步" }));
+    expect(mutateAsync).toHaveBeenLastCalledWith(expect.objectContaining({ args: [] }));
   });
 
   it("validates env and can save stdio servers", async () => {

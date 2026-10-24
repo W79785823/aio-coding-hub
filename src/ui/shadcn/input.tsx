@@ -7,6 +7,9 @@ export type InputProps = React.ComponentPropsWithRef<"input"> & {
 export function Input({ className, mono, ref, ...props }: InputProps) {
   return (
     <input
+      autoCapitalize="off"
+      autoCorrect="off"
+      spellCheck={false}
       ref={ref}
       className={cn(
         "h-10 w-full rounded-lg border border-line bg-surface-inset px-3 text-sm text-foreground outline-none transition-colors",
