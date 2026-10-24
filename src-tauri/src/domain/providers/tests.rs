@@ -962,11 +962,41 @@ fn delete_removes_provider_request_logs_when_requested() {
         upsert(&db, default_provider_params("delete-clear-other")).expect("save other provider");
     seed_usage_request_log(&db, "trace-delete-clear", saved.id);
     seed_usage_request_log(&db, "trace-delete-other", other.id);
+    {
+        let conn = db.open_connection().unwrap();
+        conn.execute(
+            "UPDATE providers SET auth_mode = 'oauth', oauth_quota_baselines_json = '{\"short\":null,\"weekly\":null}'
+             WHERE id = ?1", [other.id],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO provider_oauth_limit_snapshots(provider_id, checked_at, updated_at, revision)
+             VALUES (?1, 1, 1, 3)", [other.id],
+        ).unwrap();
+        conn.execute(
+            "UPDATE request_logs SET cost_source_provider_id = ?1 WHERE trace_id = 'trace-delete-clear'",
+            [other.id],
+        ).unwrap();
+    }
 
     delete(&db, saved.id, true).expect("delete provider");
 
     assert!(!request_log_exists(&db, "trace-delete-clear"));
     assert!(request_log_exists(&db, "trace-delete-other"));
+    let (baseline, revision): (Option<String>, i64) = db
+        .open_connection()
+        .unwrap()
+        .query_row(
+            "SELECT p.oauth_quota_baselines_json, s.revision FROM providers p
+         JOIN provider_oauth_limit_snapshots s ON p.id = s.provider_id WHERE p.id = ?1",
+            [other.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert!(
+        baseline.is_none(),
+        "deleting bridge costs invalidates the source's sample"
+    );
+    assert_eq!(revision, 4);
 }
 
 fn create_oauth_provider_for_cas_test(db: &crate::db::Db, name: &str) -> i64 {

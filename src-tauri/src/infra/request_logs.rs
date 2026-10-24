@@ -434,15 +434,61 @@ pub fn purge_expired(db: &db::Db, retention_days: u32, now_unix: i64) -> AppResu
     loop {
         // Re-acquire per batch so the pooled connection (pool max is small) is
         // not held across the inter-batch pauses of a long purge.
-        let conn = db.open_connection()?;
-        let deleted = conn
+        let mut conn = db.open_connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| db_err!("failed to start request-log retention: {e}"))?;
+        let affected_providers: Vec<i64> = {
+            let mut stmt = tx.prepare(
+                "WITH expired AS (
+                   SELECT final_provider_id, cost_source_provider_id, created_at,
+                     excluded_from_stats, status, error_code,
+                     COALESCE(NULLIF(created_at_ms, 0), created_at * 1000)
+                       + COALESCE(duration_ms, 0) AS completed_at_ms
+                   FROM request_logs WHERE created_at < ?1
+                   ORDER BY created_at, id LIMIT ?2
+                 )
+                 SELECT DISTINCT p.id FROM expired l JOIN providers p
+                   ON p.id = l.final_provider_id OR p.id = l.cost_source_provider_id
+                 WHERE p.auth_mode = 'oauth'
+                   AND l.created_at >= COALESCE(p.oauth_cost_start_at, 0)
+                   AND l.excluded_from_stats = 0 AND l.status >= 200 AND l.status < 300
+                   AND l.error_code IS NULL
+                   AND (
+                     p.oauth_quota_baselines_json IS NULL
+                     OR l.completed_at_ms >= COALESCE(json_extract(p.oauth_quota_baselines_json, '$.short.sample_start_at_ms'),
+                                    json_extract(p.oauth_quota_baselines_json, '$.short.sample_start_at') * 1000,
+                                    9223372036854775807)
+                     OR l.completed_at_ms >= COALESCE(json_extract(p.oauth_quota_baselines_json, '$.weekly.sample_start_at_ms'),
+                                    json_extract(p.oauth_quota_baselines_json, '$.weekly.sample_start_at') * 1000,
+                                    9223372036854775807)
+                   )",
+            ).map_err(|e| db_err!("failed to prepare expired quota samples: {e}"))?;
+            let rows = stmt
+                .query_map(params![cutoff, RETENTION_PURGE_BATCH_SIZE as i64], |row| {
+                    row.get(0)
+                })
+                .map_err(|e| db_err!("failed to query expired quota samples: {e}"))?;
+            rows.collect::<Result<_, _>>()
+                .map_err(|e| db_err!("failed to read expired quota samples: {e}"))?
+        };
+        let deleted = tx
             .execute(
                 "DELETE FROM request_logs WHERE id IN (
-                   SELECT id FROM request_logs WHERE created_at < ?1 LIMIT ?2
+                   SELECT id FROM request_logs WHERE created_at < ?1
+                   ORDER BY created_at, id LIMIT ?2
                  )",
                 params![cutoff, RETENTION_PURGE_BATCH_SIZE as i64],
             )
             .map_err(|e| db_err!("failed to purge expired request_logs: {e}"))?;
+        for provider_id in affected_providers {
+            crate::domain::provider_oauth_quota_estimate::invalidate_sampling(
+                &tx,
+                Some(provider_id),
+            )?;
+        }
+        tx.commit()
+            .map_err(|e| db_err!("failed to commit request-log retention: {e}"))?;
         drop(conn);
         total = total.saturating_add(deleted as u64);
         if deleted < RETENTION_PURGE_BATCH_SIZE {

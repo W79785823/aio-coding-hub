@@ -1785,6 +1785,26 @@ pub fn delete(
     }
 
     if clear_usage_stats {
+        let sources = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT DISTINCT cost_source_provider_id FROM request_logs
+                     WHERE final_provider_id = ?1 AND cost_source_provider_id IS NOT NULL
+                       AND cost_source_provider_id != ?1",
+                )
+                .map_err(|e| db_err!("failed to prepare deleted provider cost sources: {e}"))?;
+            let rows = stmt
+                .query_map([provider_id], |row| row.get::<_, i64>(0))
+                .map_err(|e| db_err!("failed to query deleted provider cost sources: {e}"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| db_err!("failed to read deleted provider cost sources: {e}"))?
+        };
+        for source_id in sources {
+            crate::domain::provider_oauth_quota_estimate::invalidate_sampling(
+                &tx,
+                Some(source_id),
+            )?;
+        }
         tx.execute(
             "DELETE FROM request_logs WHERE final_provider_id = ?1",
             params![provider_id],
@@ -2181,6 +2201,13 @@ pub(crate) fn get_oauth_details(
     provider_id: i64,
 ) -> crate::shared::error::AppResult<ProviderOAuthDetails> {
     let conn = db.open_connection()?;
+    get_oauth_details_with_conn(&conn, provider_id)
+}
+
+pub(crate) fn get_oauth_details_with_conn(
+    conn: &Connection,
+    provider_id: i64,
+) -> crate::shared::error::AppResult<ProviderOAuthDetails> {
     conn.query_row(
         r#"
 SELECT id, cli_key, oauth_provider_type, oauth_access_token, oauth_refresh_token,

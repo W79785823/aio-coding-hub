@@ -138,6 +138,20 @@ export async function clearProviderOAuthLimitsCache(queryClient: QueryClient, pr
   queryClient.setQueryData(queryKey, null);
 }
 
+export async function clearProviderOAuthQuotaEstimatesCache(
+  queryClient: QueryClient,
+  providerId?: number
+) {
+  const queryKey =
+    providerId == null
+      ? oauthLimitsKeys.all
+      : oauthLimitsKeys.detail(validateProviderId(providerId));
+  await queryClient.cancelQueries({ queryKey });
+  queryClient.setQueriesData<OAuthLimitsResult | null>({ queryKey }, (previous) =>
+    previous ? { ...previous, quota_estimates: null } : previous
+  );
+}
+
 export function readProviderOAuthLimitsCache(
   queryClient: QueryClient,
   providerId: number
@@ -186,11 +200,9 @@ export async function resetProviderOAuthCodexQuota(
   const refreshedLimits = result.refreshed_limits;
   const queryKey = oauthLimitsKeys.detail(normalizedProviderId);
 
-  if (result.success || refreshedLimits) {
+  if (refreshedLimits) {
     // An older usage fetch must not restore the pre-reset estimates.
     await queryClient.cancelQueries({ queryKey, exact: true });
-  }
-  if (refreshedLimits) {
     const next = normalizeProviderOAuthLimitsResult(refreshedLimits);
     queryClient.setQueryData(queryKey, next);
     try {
@@ -208,9 +220,7 @@ export async function resetProviderOAuthCodexQuota(
       void queryClient.invalidateQueries({ queryKey: gatewayKeys.circuits() });
     }
   } else if (result.success) {
-    queryClient.setQueryData<OAuthLimitsResult | null>(queryKey, (previous) =>
-      previous ? { ...previous, quota_estimates: null } : previous
-    );
+    await clearProviderOAuthQuotaEstimatesCache(queryClient, normalizedProviderId);
   }
 
   return result;
@@ -271,7 +281,7 @@ export function useProviderDeleteMutation() {
   return useMutation({
     mutationFn: (input: { cliKey: CliKey; providerId: number; clearUsageStats?: boolean }) =>
       providerDelete(input.providerId, { clearUsageStats: input.clearUsageStats === true }),
-    onSuccess: (ok, input) => {
+    onSuccess: async (ok, input) => {
       if (!ok) return;
       const cliKey = validateProviderCliKey(input.cliKey);
 
@@ -279,6 +289,10 @@ export function useProviderDeleteMutation() {
         if (!prev) return prev;
         return prev.filter((row) => row.id !== input.providerId);
       });
+      if (input.clearUsageStats) {
+        await clearProviderOAuthQuotaEstimatesCache(queryClient);
+        void queryClient.invalidateQueries({ queryKey: oauthLimitsKeys.all });
+      }
     },
   });
 }

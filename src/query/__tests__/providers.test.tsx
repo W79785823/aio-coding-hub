@@ -830,12 +830,17 @@ describe("query/providers", () => {
     expect(client.getQueryData(providersKeys.list(" claude " as never))).toBeUndefined();
   });
 
-  it("useProviderDeleteMutation forwards usage stats cleanup choice", async () => {
+  it("useProviderDeleteMutation clears source estimates when deleting usage stats", async () => {
     setTauriRuntime();
 
     vi.mocked(providerDelete).mockResolvedValue(true);
 
     const client = createTestQueryClient();
+    const cachedSourceLimits = {
+      limit_5h_text: "75%",
+      quota_estimates: { short: { estimated_total_usd: 20 }, weekly: null },
+    };
+    client.setQueryData(oauthLimitsKeys.detail(2), cachedSourceLimits);
     const wrapper = createQueryWrapper(client);
 
     const { result } = renderHook(() => useProviderDeleteMutation(), { wrapper });
@@ -848,6 +853,10 @@ describe("query/providers", () => {
     });
 
     expect(providerDelete).toHaveBeenCalledWith(1, { clearUsageStats: true });
+    expect(client.getQueryData(oauthLimitsKeys.detail(2))).toEqual({
+      ...cachedSourceLimits,
+      quota_estimates: null,
+    });
   });
 
   it("useProviderDeleteMutation is a no-op when service returns false", async () => {

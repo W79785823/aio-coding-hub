@@ -12,11 +12,15 @@ SELECT
 FROM (
   SELECT cost_usd_femto FROM request_logs
   WHERE final_provider_id = ?1 AND created_at >= ?2 AND created_at <= ?3
+    AND COALESCE(NULLIF(created_at_ms, 0), created_at * 1000) + COALESCE(duration_ms, 0) >= ?4
+    AND COALESCE(NULLIF(created_at_ms, 0), created_at * 1000) + COALESCE(duration_ms, 0) <= ?5
     AND excluded_from_stats = 0 AND status >= 200 AND status < 300 AND error_code IS NULL
   UNION ALL
   SELECT cost_usd_femto FROM request_logs
   WHERE cost_source_provider_id = ?1 AND created_at >= ?2 AND created_at <= ?3
     AND final_provider_id IS NOT ?1
+    AND COALESCE(NULLIF(created_at_ms, 0), created_at * 1000) + COALESCE(duration_ms, 0) >= ?4
+    AND COALESCE(NULLIF(created_at_ms, 0), created_at * 1000) + COALESCE(duration_ms, 0) <= ?5
     AND excluded_from_stats = 0 AND status >= 200 AND status < 300 AND error_code IS NULL
 )
 "#;
@@ -48,7 +52,8 @@ pub(crate) struct ProviderOAuthQuotaBaselines {
 pub(crate) struct OAuthQuotaBaseline {
     window_start: i64,
     window_end: i64,
-    sample_start_at: i64,
+    #[serde(default)]
+    sample_start_at_ms: Option<i64>,
     used_percent: f64,
 }
 
@@ -60,34 +65,23 @@ pub(crate) struct OAuthQuotaWindow {
     pub cost_start_at: Option<i64>,
 }
 
-pub(crate) fn reset_sampling(
-    db: &crate::db::Db,
-    provider_id: i64,
-    expected_access_token: &str,
+// Call in the same transaction as the operation that invalidates the samples.
+pub(crate) fn invalidate_sampling(
+    tx: &rusqlite::Transaction<'_>,
+    provider_id: Option<i64>,
 ) -> AppResult<()> {
-    let mut conn = db.open_connection()?;
-    let tx = conn
-        .transaction()
-        .map_err(|e| db_err!("failed to start quota sampling reset: {e}"))?;
-    let changed = tx
-        .execute(
-            "UPDATE providers SET oauth_quota_baselines_json = NULL
-             WHERE id = ?1 AND auth_mode = 'oauth' AND oauth_access_token = ?2",
-            params![provider_id, expected_access_token],
-        )
-        .map_err(|e| db_err!("failed to reset OAuth quota sampling: {e}"))?;
-    if changed == 0 {
-        return Err(
-            "OAUTH_QUOTA_STALE_TOKEN: account changed while resetting quota sampling".into(),
-        );
-    }
     tx.execute(
-        "UPDATE provider_oauth_limit_snapshots SET revision = revision + 1 WHERE provider_id = ?1",
+        "UPDATE providers SET oauth_quota_baselines_json = NULL
+         WHERE (?1 IS NULL OR id = ?1) AND auth_mode = 'oauth'",
+        [provider_id],
+    )
+    .map_err(|e| db_err!("failed to reset OAuth quota sampling: {e}"))?;
+    tx.execute(
+        "UPDATE provider_oauth_limit_snapshots SET revision = revision + 1
+         WHERE ?1 IS NULL OR provider_id = ?1",
         [provider_id],
     )
     .map_err(|e| db_err!("failed to invalidate pre-reset quota sample: {e}"))?;
-    tx.commit()
-        .map_err(|e| db_err!("failed to commit quota sampling reset: {e}"))?;
     Ok(())
 }
 
@@ -96,9 +90,10 @@ pub(crate) fn estimate_window(
     conn: &Connection,
     provider_id: i64,
     window: OAuthQuotaWindow,
-    now_unix: i64,
+    now_ms: i64,
     baseline: &mut Option<OAuthQuotaBaseline>,
 ) -> AppResult<Option<OAuthQuotaEstimate>> {
+    let now_unix = now_ms / 1000;
     let Some(remaining) = window
         .remaining_percent
         .filter(|value| value.is_finite() && (0.0..=100.0).contains(value))
@@ -122,27 +117,35 @@ pub(crate) fn estimate_window(
     if !baseline.as_ref().is_some_and(|baseline| {
         baseline.window_start == start_at
             && baseline.window_end == reset_at
-            && baseline.sample_start_at >= cost_start_at
+            && baseline
+                .sample_start_at_ms
+                .is_some_and(|sample| sample >= cost_start_at * 1000)
             && baseline.used_percent <= current_used_percent
     }) {
         *baseline = Some(OAuthQuotaBaseline {
             window_start: start_at,
             window_end: reset_at,
-            // Logs use request start seconds. Exclude the first sample's second
-            // so requests already reflected in its utilization are not counted.
-            sample_start_at: now_unix.saturating_add(1).max(cost_start_at),
+            sample_start_at_ms: Some(now_ms.saturating_add(1).max(cost_start_at * 1000)),
             used_percent: current_used_percent,
         });
     }
     let baseline = baseline.as_ref().expect("initialized quota baseline");
 
+    // Account ownership still follows request start; sampling follows completion
+    // so requests in flight at the first observation are not permanently lost.
     // TOTAL avoids SQLite integer-SUM overflow. Like sub2api, estimate from
     // recorded costs even when other requests are unpriced. Keep their count
     // so the UI can explain that the estimate may be incomplete.
     let (cost_femto, sample_count, unpriced_count): (f64, i64, i64) = conn
         .query_row(
             WINDOW_COST_SQL,
-            params![provider_id, baseline.sample_start_at, now_unix],
+            params![
+                provider_id,
+                cost_start_at,
+                now_unix,
+                baseline.sample_start_at_ms,
+                now_ms
+            ],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map_err(|e| db_err!("failed to query OAuth quota estimate costs: {e}"))?;
@@ -169,6 +172,234 @@ pub(crate) fn estimate_window(
 mod tests {
     use super::*;
 
+    #[test]
+    fn request_completing_after_baseline_keeps_cost_and_usage_aligned() {
+        let conn = database();
+        conn.execute(
+            "INSERT INTO request_logs(final_provider_id, created_at, status, cost_usd_femto)
+             VALUES (1, ?1, NULL, NULL)",
+            [NOW - 60],
+        )
+        .unwrap();
+        let mut baseline = None;
+        estimate_at_seconds(&conn, 1, window(80.0), NOW, &mut baseline).unwrap();
+
+        // The already-running request finishes after the quota observation.
+        // Its request-start timestamp is preserved by request_logs' upsert.
+        conn.execute(
+            "UPDATE request_logs SET status = 200, duration_ms = 65000, cost_usd_femto = 1000000000000000",
+            [],
+        ).unwrap();
+        estimate_at_seconds(&conn, 1, window(75.0), NOW + 5, &mut baseline).unwrap();
+        insert(&conn, 1, NOW + 10, Some(1_000_000_000_000_000));
+        let next = estimate_at_seconds(&conn, 1, window(70.0), NOW + 15, &mut baseline)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            next.estimated_total_usd,
+            Some(20.0),
+            "two $1 requests consumed 10 percentage points after the baseline"
+        );
+    }
+
+    #[test]
+    fn quota_estimate_uses_millisecond_completion_boundary_and_keeps_login_isolation() {
+        let conn = database();
+        // Same-second completions before and after the observation, plus a
+        // previous account's long-running request completing after login.
+        for (start_ms, duration_ms, cost) in
+            [(NOW * 1000 + 100, 200, 50), ((NOW - 60) * 1000, 61_000, 50)]
+        {
+            conn.execute(
+                "INSERT INTO request_logs(final_provider_id, created_at, created_at_ms, duration_ms, status, cost_usd_femto)
+                 VALUES (1, ?1, ?2, ?3, 200, ?4)",
+                params![start_ms / 1000, start_ms, duration_ms, cost * 1_000_000_000_000_000_i64],
+            ).unwrap();
+        }
+        let current_window = OAuthQuotaWindow {
+            cost_start_at: Some(NOW),
+            ..window(80.0)
+        };
+        let mut baseline = None;
+        estimate_window(&conn, 1, current_window, NOW * 1000 + 500, &mut baseline).unwrap();
+        conn.execute(
+            "INSERT INTO request_logs(final_provider_id, created_at, created_at_ms, duration_ms, status, cost_usd_femto)
+             VALUES (1, ?1, ?2, 100, 200, 1000000000000000)",
+            params![NOW, NOW * 1000 + 600],
+        ).unwrap();
+        let next = estimate_window(
+            &conn,
+            1,
+            OAuthQuotaWindow {
+                remaining_percent: Some(75.0),
+                ..current_window
+            },
+            (NOW + 2) * 1000,
+            &mut baseline,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(next.sample_count, 1);
+        assert_eq!(next.used_usd, Some(1.0));
+        assert_eq!(next.estimated_total_usd, Some(20.0));
+    }
+
+    #[test]
+    fn quota_estimate_excludes_backfilled_costs_completed_before_sampling() {
+        let conn = database();
+        insert(&conn, 1, NOW - 10, None);
+        let mut baseline = None;
+        estimate_at_seconds(&conn, 1, window(80.0), NOW, &mut baseline).unwrap();
+        conn.execute(
+            "UPDATE request_logs SET cost_usd_femto = 50000000000000000",
+            [],
+        )
+        .unwrap();
+        insert(&conn, 1, NOW + 1, Some(1_000_000_000_000_000));
+        let next = estimate_at_seconds(&conn, 1, window(75.0), NOW + 2, &mut baseline)
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.used_usd, Some(1.0));
+        assert_eq!(next.estimated_total_usd, Some(20.0));
+    }
+
+    #[test]
+    fn quota_estimate_restarts_legacy_second_based_samples() {
+        let conn = database();
+        let mut baseline = serde_json::from_value(serde_json::json!({
+            "window_start": START, "window_end": RESET,
+            "sample_start_at": NOW - 30, "used_percent": 10.0
+        }))
+        .unwrap();
+        insert(&conn, 1, NOW - 10, Some(1_000_000_000_000_000));
+        let first = estimate_at_seconds(&conn, 1, window(80.0), NOW, &mut baseline)
+            .unwrap()
+            .unwrap();
+        assert!(first.estimated_total_usd.is_none());
+        assert_eq!(baseline.unwrap().used_percent, 20.0);
+    }
+
+    #[test]
+    fn clearing_request_logs_restarts_the_sampling_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::init_for_tests(&dir.path().join("review-clear.db")).unwrap();
+        let mut baseline = None;
+        {
+            let conn = db.open_connection().unwrap();
+            conn.execute_batch(
+                "INSERT INTO providers(id, cli_key, name, base_url, api_key_plaintext,
+                   created_at, updated_at, auth_mode, oauth_access_token)
+                 VALUES (1, 'codex', 'test', '', '', 1, 1, 'oauth', 'same-account');",
+            )
+            .unwrap();
+            estimate_at_seconds(&conn, 1, window(80.0), NOW, &mut baseline).unwrap();
+            conn.execute(
+                "INSERT INTO request_logs(trace_id, cli_key, method, path, status,
+                   final_provider_id, created_at, cost_usd_femto)
+                 VALUES ('before-clear', 'codex', 'POST', '/responses', 200, 1, ?1, 2000000000000000)",
+                [NOW + 5],
+            ).unwrap();
+            let before = estimate_at_seconds(&conn, 1, window(70.0), NOW + 10, &mut baseline)
+                .unwrap()
+                .unwrap();
+            assert_eq!(before.estimated_total_usd, Some(20.0));
+            let json = serde_json::to_string(&ProviderOAuthQuotaBaselines {
+                short: baseline,
+                weekly: None,
+            })
+            .unwrap();
+            conn.execute(
+                "UPDATE providers SET oauth_quota_baselines_json = ?1 WHERE id = 1",
+                [json],
+            )
+            .unwrap();
+        }
+        crate::data_management::request_logs_clear_all(&db).unwrap();
+        let conn = db.open_connection().unwrap();
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT oauth_quota_baselines_json FROM providers WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut after: ProviderOAuthQuotaBaselines = json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .unwrap()
+            .unwrap_or_default();
+        estimate_at_seconds(&conn, 1, window(70.0), NOW + 20, &mut after.short).unwrap();
+        conn.execute(
+            "INSERT INTO request_logs(trace_id, cli_key, method, path, status,
+               final_provider_id, created_at, cost_usd_femto)
+             VALUES ('after-clear', 'codex', 'POST', '/responses', 200, 1, ?1, 1000000000000000)",
+            [NOW + 25],
+        )
+        .unwrap();
+        let next = estimate_at_seconds(&conn, 1, window(65.0), NOW + 30, &mut after.short)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            next.estimated_total_usd,
+            Some(20.0),
+            "after clearing the samples, new $1 cost must correspond to the new 5-point growth"
+        );
+    }
+
+    #[test]
+    fn retention_invalidates_deleted_samples_including_bridge_costs_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::init_for_tests(&dir.path().join("retention-quota.db")).unwrap();
+        let conn = db.open_connection().unwrap();
+        let day = 24 * 3600;
+        for id in [1, 2, 3, 5] {
+            let sample_at = if id == 2 { NOW - 100 } else { NOW - 3 * day };
+            let baseline = ProviderOAuthQuotaBaselines {
+                short: None,
+                weekly: Some(OAuthQuotaBaseline {
+                    window_start: NOW - 6 * day,
+                    window_end: NOW + day,
+                    sample_start_at_ms: Some(sample_at * 1000),
+                    used_percent: 20.0,
+                }),
+            };
+            conn.execute(
+                "INSERT INTO providers(id, cli_key, name, base_url, api_key_plaintext, created_at, updated_at,
+                   auth_mode, oauth_access_token, oauth_quota_baselines_json, oauth_cost_start_at)
+                 VALUES (?1, 'codex', 'retention-' || ?1, '', '', 1, 1, 'oauth', 'token', ?2, ?3)",
+                params![id, serde_json::to_string(&baseline).unwrap(), if id == 5 { NOW } else { NOW - 6 * day }],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO provider_oauth_limit_snapshots(provider_id, checked_at, updated_at, revision)
+                 VALUES (?1, 1, 1, 3)", [id],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO request_logs(trace_id, cli_key, method, path, status, final_provider_id,
+                   cost_source_provider_id, created_at, cost_usd_femto)
+                 VALUES (?1, 'codex', 'POST', '/responses', 200, ?2, ?3, ?4, 1000000000000000)",
+                params![format!("expired-{id}"), if id == 3 { 4 } else { id },
+                    if id == 3 { Some(3) } else { None }, NOW - 2 * day],
+            ).unwrap();
+        }
+        drop(conn);
+        assert_eq!(crate::request_logs::purge_expired(&db, 1, NOW).unwrap(), 4);
+        let conn = db.open_connection().unwrap();
+        for id in [1, 2, 3, 5] {
+            let (baseline, revision): (Option<String>, i64) = conn
+                .query_row(
+                    "SELECT p.oauth_quota_baselines_json, s.revision FROM providers p
+                 JOIN provider_oauth_limit_snapshots s ON p.id = s.provider_id WHERE p.id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            let affected = id == 1 || id == 3;
+            assert_eq!(baseline.is_none(), affected, "provider {id}");
+            assert_eq!(revision, if affected { 4 } else { 3 }, "provider {id}");
+        }
+    }
+
     const NOW: i64 = 1_800_000_000;
     const START: i64 = NOW - 3600;
     const RESET: i64 = START + 5 * 3600;
@@ -179,7 +410,8 @@ mod tests {
             "CREATE TABLE request_logs (
               final_provider_id INTEGER, created_at INTEGER, status INTEGER,
               excluded_from_stats INTEGER DEFAULT 0, error_code TEXT, cost_usd_femto INTEGER,
-              special_settings_json TEXT, cost_source_provider_id INTEGER
+              special_settings_json TEXT, cost_source_provider_id INTEGER,
+              created_at_ms INTEGER DEFAULT 0, duration_ms INTEGER DEFAULT 0
             );",
         )
         .unwrap();
@@ -204,6 +436,16 @@ mod tests {
         }
     }
 
+    fn estimate_at_seconds(
+        conn: &Connection,
+        provider_id: i64,
+        window: OAuthQuotaWindow,
+        now_unix: i64,
+        baseline: &mut Option<OAuthQuotaBaseline>,
+    ) -> AppResult<Option<OAuthQuotaEstimate>> {
+        estimate_window(conn, provider_id, window, now_unix * 1000, baseline)
+    }
+
     fn estimate_from_window_start(
         conn: &Connection,
         provider_id: i64,
@@ -214,10 +456,10 @@ mod tests {
         let mut baseline = Some(OAuthQuotaBaseline {
             window_start: start,
             window_end: window.reset_at.unwrap_or(0),
-            sample_start_at: start.max(window.cost_start_at.unwrap_or(start)),
+            sample_start_at_ms: Some(start.max(window.cost_start_at.unwrap_or(start)) * 1000),
             used_percent: 0.0,
         });
-        estimate_window(conn, provider_id, window, now_unix, &mut baseline)
+        estimate_at_seconds(conn, provider_id, window, now_unix, &mut baseline)
     }
 
     #[test]
@@ -226,14 +468,14 @@ mod tests {
         insert(&conn, 1, START, Some(20_000_000_000_000_000));
         insert(&conn, 1, NOW, Some(5_000_000_000_000_000));
         let mut baseline = None;
-        let first = estimate_window(&conn, 1, window(80.0), NOW, &mut baseline)
+        let first = estimate_at_seconds(&conn, 1, window(80.0), NOW, &mut baseline)
             .unwrap()
             .unwrap();
         assert_eq!(first.sample_count, 0);
         assert!(first.estimated_total_usd.is_none());
 
         insert(&conn, 1, NOW + 5, Some(1_000_000_000_000_000));
-        let next = estimate_window(&conn, 1, window(75.0), NOW + 10, &mut baseline)
+        let next = estimate_at_seconds(&conn, 1, window(75.0), NOW + 10, &mut baseline)
             .unwrap()
             .unwrap();
         assert_eq!(next.used_usd, Some(1.0));
@@ -242,7 +484,7 @@ mod tests {
         assert_eq!(next.sample_count, 1);
 
         insert(&conn, 1, NOW + 15, Some(1_000_000_000_000_000));
-        let next = estimate_window(&conn, 1, window(70.0), NOW + 20, &mut baseline)
+        let next = estimate_at_seconds(&conn, 1, window(70.0), NOW + 20, &mut baseline)
             .unwrap()
             .unwrap();
         assert_eq!(next.used_usd, Some(2.0));
@@ -260,13 +502,13 @@ mod tests {
             remaining_percent: Some(83.0),
             ..window(96.0)
         };
-        estimate_window(&conn, 1, window(96.0), NOW, &mut baselines.short).unwrap();
-        estimate_window(&conn, 1, weekly, NOW, &mut baselines.weekly).unwrap();
+        estimate_at_seconds(&conn, 1, window(96.0), NOW, &mut baselines.short).unwrap();
+        estimate_at_seconds(&conn, 1, weekly, NOW, &mut baselines.weekly).unwrap();
         insert(&conn, 1, NOW + 5, Some(1_000_000_000_000_000));
-        let short = estimate_window(&conn, 1, window(91.0), NOW + 10, &mut baselines.short)
+        let short = estimate_at_seconds(&conn, 1, window(91.0), NOW + 10, &mut baselines.short)
             .unwrap()
             .unwrap();
-        let weekly = estimate_window(
+        let weekly = estimate_at_seconds(
             &conn,
             1,
             OAuthQuotaWindow {
@@ -287,19 +529,19 @@ mod tests {
     fn quota_estimate_restarts_after_rollover_or_utilization_reset() {
         let conn = database();
         let mut baseline = None;
-        estimate_window(&conn, 1, window(80.0), NOW, &mut baseline).unwrap();
+        estimate_at_seconds(&conn, 1, window(80.0), NOW, &mut baseline).unwrap();
         insert(&conn, 1, NOW + 5, Some(50_000_000_000_000_000));
 
         let next_window = OAuthQuotaWindow {
             reset_at: Some(RESET + 5 * 3600),
             ..window(90.0)
         };
-        let rolled = estimate_window(&conn, 1, next_window, RESET + 10, &mut baseline)
+        let rolled = estimate_at_seconds(&conn, 1, next_window, RESET + 10, &mut baseline)
             .unwrap()
             .unwrap();
         assert!(rolled.estimated_total_usd.is_none());
         insert(&conn, 1, RESET + 15, Some(1_000_000_000_000_000));
-        let next = estimate_window(
+        let next = estimate_at_seconds(
             &conn,
             1,
             OAuthQuotaWindow {
@@ -313,7 +555,7 @@ mod tests {
         .unwrap();
         assert_eq!(next.estimated_total_usd, Some(20.0));
 
-        let reset = estimate_window(
+        let reset = estimate_at_seconds(
             &conn,
             1,
             OAuthQuotaWindow {
@@ -333,18 +575,18 @@ mod tests {
     fn quota_estimate_waits_for_cost_and_percent_growth() {
         let conn = database();
         let mut baseline = None;
-        estimate_window(&conn, 1, window(80.0), NOW, &mut baseline).unwrap();
-        let no_cost = estimate_window(&conn, 1, window(75.0), NOW + 5, &mut baseline)
+        estimate_at_seconds(&conn, 1, window(80.0), NOW, &mut baseline).unwrap();
+        let no_cost = estimate_at_seconds(&conn, 1, window(75.0), NOW + 5, &mut baseline)
             .unwrap()
             .unwrap();
         assert!(no_cost.estimated_total_usd.is_none());
 
         insert(&conn, 1, NOW + 10, Some(1_000_000_000_000_000));
-        let no_growth = estimate_window(&conn, 1, window(80.0), NOW + 15, &mut baseline)
+        let no_growth = estimate_at_seconds(&conn, 1, window(80.0), NOW + 15, &mut baseline)
             .unwrap()
             .unwrap();
         assert!(no_growth.estimated_total_usd.is_none());
-        let next = estimate_window(&conn, 1, window(75.0), NOW + 20, &mut baseline)
+        let next = estimate_at_seconds(&conn, 1, window(75.0), NOW + 20, &mut baseline)
             .unwrap()
             .unwrap();
         assert_eq!(next.estimated_total_usd, Some(20.0));
@@ -449,7 +691,9 @@ mod tests {
         let plan: Vec<String> = conn
             .prepare(&format!("EXPLAIN QUERY PLAN {WINDOW_COST_SQL}"))
             .unwrap()
-            .query_map(params![1, START, NOW], |row| row.get(3))
+            .query_map(params![1, START, NOW, START * 1000, NOW * 1000], |row| {
+                row.get(3)
+            })
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();

@@ -344,7 +344,7 @@ pub(crate) async fn attach_quota_estimates(
                 .map_err(|e| db_err!("failed to read OAuth quota baselines: {e}"))?
                 .unwrap_or_default();
             let previous_baselines = baselines.clone();
-            let now_unix = crate::shared::time::now_unix_seconds();
+            let now_ms = crate::shared::time::now_unix_millis();
             let estimates = ProviderOAuthQuotaEstimates {
                 short: estimate_window(
                     &tx,
@@ -355,7 +355,7 @@ pub(crate) async fn attach_quota_estimates(
                         duration_seconds: result.limit_window_seconds.0,
                         cost_start_at,
                     },
-                    now_unix,
+                    now_ms,
                     &mut baselines.short,
                 )?,
                 weekly: estimate_window(
@@ -367,7 +367,7 @@ pub(crate) async fn attach_quota_estimates(
                         duration_seconds: result.limit_window_seconds.1,
                         cost_start_at,
                     },
-                    now_unix,
+                    now_ms,
                     &mut baselines.weekly,
                 )?,
             };
@@ -1054,8 +1054,8 @@ mod tests {
             assert_eq!(baselines["short"]["used_percent"], 20.0);
             assert_eq!(baselines["weekly"]["used_percent"], 25.0);
             // Simulate elapsed time without making the test wait for the clock.
-            baselines["short"]["sample_start_at"] = (now - 30).into();
-            baselines["weekly"]["sample_start_at"] = (now - 30).into();
+            baselines["short"]["sample_start_at_ms"] = ((now - 30) * 1000).into();
+            baselines["weekly"]["sample_start_at_ms"] = ((now - 30) * 1000).into();
             conn.execute(
                 "UPDATE providers SET oauth_quota_baselines_json = ?1 WHERE id = ?2",
                 rusqlite::params![baselines.to_string(), provider_id],
@@ -1141,7 +1141,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quota_sampling_reset_rejects_stale_tokens_and_pre_reset_enrichment() {
+    async fn quota_sampling_reset_rejects_pre_reset_enrichment() {
         let (_dir, db, provider_id) = quota_test_provider();
         let app = tauri::test::mock_app();
         let details = crate::providers::get_oauth_details(&db, provider_id).unwrap();
@@ -1163,13 +1163,19 @@ mod tests {
                 )
                 .unwrap()
         };
-        let baseline = read_baseline().unwrap();
-        use crate::domain::provider_oauth_quota_estimate::reset_sampling;
-        assert!(reset_sampling(&db, provider_id, "old-account-token").is_err());
-        assert_eq!(read_baseline().as_deref(), Some(baseline.as_str()));
+        assert!(read_baseline().is_some());
         assert_eq!(read_snapshot_revision(&db, provider_id).await.unwrap(), 1);
 
-        reset_sampling(&db, provider_id, &details.oauth_access_token).unwrap();
+        {
+            let mut conn = db.open_connection().unwrap();
+            let tx = conn.transaction().unwrap();
+            crate::domain::provider_oauth_quota_estimate::invalidate_sampling(
+                &tx,
+                Some(provider_id),
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
         assert!(read_baseline().is_none());
         assert_eq!(read_snapshot_revision(&db, provider_id).await.unwrap(), 2);
         attach_quota_estimates(&db, provider_id, &mut result).await;
@@ -1195,6 +1201,39 @@ mod tests {
             .is_none());
         let next: serde_json::Value = serde_json::from_str(&read_baseline().unwrap()).unwrap();
         assert_eq!(next["short"]["used_percent"], 0.0);
+    }
+
+    #[tokio::test]
+    async fn request_log_clear_rejects_pre_clear_enrichment() {
+        let (_dir, db, provider_id) = quota_test_provider();
+        let app = tauri::test::mock_app();
+        let details = crate::providers::get_oauth_details(&db, provider_id).unwrap();
+        let now = crate::shared::time::now_unix_seconds();
+        let mut result = parsed_codex(serde_json::json!({"rate_limit": {
+            "primary_window": {"used_percent": 20, "reset_at": now + 3600}
+        }}));
+        save_result(app.handle(), &db, &details, &mut result, 0)
+            .await
+            .unwrap();
+        attach_quota_estimates(&db, provider_id, &mut result).await;
+        assert!(result.quota_estimates.is_some());
+        crate::data_management::request_logs_clear_all(&db).unwrap();
+        assert_eq!(read_snapshot_revision(&db, provider_id).await.unwrap(), 2);
+        attach_quota_estimates(&db, provider_id, &mut result).await;
+        assert!(result.quota_estimates.is_none());
+        let baseline: Option<String> = db
+            .open_connection()
+            .unwrap()
+            .query_row(
+                "SELECT oauth_quota_baselines_json FROM providers WHERE id = ?1",
+                [provider_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            baseline.is_none(),
+            "old queries must not restore a cleared baseline"
+        );
     }
 
     #[tokio::test]

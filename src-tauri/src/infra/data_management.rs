@@ -126,6 +126,7 @@ pub fn request_logs_clear_all(
     let request_logs_deleted = tx
         .execute("DELETE FROM request_logs", [])
         .map_err(|e| db_err!("failed to clear request_logs: {e}"))?;
+    crate::domain::provider_oauth_quota_estimate::invalidate_sampling(&tx, None)?;
 
     tx.commit()
         .map_err(|e| db_err!("failed to commit transaction: {e}"))?;
