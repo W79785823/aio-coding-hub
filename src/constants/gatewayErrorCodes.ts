@@ -45,6 +45,11 @@ export const GatewayErrorCodes = {
   FAKE_200: "GW_FAKE_200",
 } as const;
 
+export const CLIENT_ABORT_ERROR_CODES: ReadonlySet<string> = new Set([
+  GatewayErrorCodes.STREAM_ABORTED,
+  GatewayErrorCodes.REQUEST_ABORTED,
+]);
+
 export type GatewayErrorCode = (typeof GatewayErrorCodes)[keyof typeof GatewayErrorCodes];
 
 export type GatewayErrorDescription = { desc: string; suggestion: string };

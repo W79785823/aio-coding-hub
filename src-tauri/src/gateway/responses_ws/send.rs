@@ -1,7 +1,7 @@
 //! Per-attempt upstream WebSocket ownership; provider selection stays in the proxy loop.
 
 use super::protocol::{self, TURN_STATE_HEADER};
-use super::state::{Connection, RequestState, ReusableSocket};
+use super::state::{Connection, InterruptTarget, RequestState, ReusableSocket, WsProbe};
 use super::upstream::{self, ConnectError};
 use crate::gateway::streams::{UpstreamResponse, UpstreamStreamError};
 use crate::shared::mutex_ext::MutexExt;
@@ -223,86 +223,216 @@ pub(in crate::gateway) async fn send(
         request.generation.lock_or_recover().upstream_ws = true;
     }
     let response_headers = reusable.connection.headers.clone();
-    let stream = futures_util::stream::unfold(Some((reusable, probe)), move |state| {
-        let connection = connection.clone();
-        async move {
-            let (mut reusable, probe) = state?;
-            loop {
-                match reusable.connection.socket.next().await {
-                    Some(Ok(Message::Text(text))) => {
-                        let mut event: Value = match serde_json::from_str(&text) {
-                            Ok(event) => event,
-                            Err(_) => {
-                                connection.runtime.cool(reusable.key.clone());
-                                return Some((
-                                    Err(protocol_error("invalid upstream WebSocket JSON")),
-                                    None,
-                                ));
-                            }
-                        };
-                        let kind = match protocol::event_kind(&event) {
-                            Ok(kind) => kind,
-                            Err(message) => {
-                                connection.runtime.cool(reusable.key.clone());
-                                return Some((Err(protocol_error(message)), None));
-                            }
-                        };
-                        if let Some(headers) =
-                            event.get_mut("headers").and_then(Value::as_object_mut)
-                        {
-                            if let Some(value) = headers
-                                .remove(TURN_STATE_HEADER)
-                                .and_then(|value| value.as_str().map(str::to_owned))
-                            {
-                                reusable.turn_state = Some(value);
-                            }
-                        }
-                        let bytes = protocol::sse_bytes(&event);
-                        if matches!(
-                            kind,
-                            protocol::EventKind::Completed | protocol::EventKind::Incomplete
-                        ) {
-                            if let Some(probe) = probe {
-                                probe.succeeded();
-                            }
-                            *connection.upstream.lock_or_recover() = Some(reusable);
-                            return Some((Ok(bytes), None));
-                        }
-                        if kind == protocol::EventKind::Failed {
-                            return Some((Ok(bytes), None));
-                        }
-                        return Some((Ok(bytes), Some((reusable, probe))));
-                    }
-                    Some(Ok(Message::Ping(bytes))) => {
-                        if reusable
-                            .connection
-                            .socket
-                            .send(Message::Pong(bytes))
-                            .await
-                            .is_err()
-                        {
-                            connection.runtime.cool(reusable.key.clone());
-                            return Some((Err(protocol_error("WebSocket pong failed")), None));
-                        }
-                    }
-                    Some(Ok(Message::Pong(_))) => {}
-                    _ => {
-                        connection.runtime.cool(reusable.key.clone());
-                        return Some((
-                            Err(protocol_error("WebSocket closed before terminal response")),
-                            None,
-                        ));
-                    }
-                }
-            }
-        }
+    let (sender, controls) = tokio::sync::mpsc::channel(1);
+    *connection.interrupt.lock_or_recover() = Some(InterruptTarget {
+        response_id: None,
+        sender,
     });
+    let stream = futures_util::stream::unfold(
+        Some(ResponseStream {
+            connection,
+            reusable,
+            probe,
+            controls,
+            interruption: None,
+            terminal: None,
+            reusable_after_interrupt: true,
+        }),
+        |state| async move { state?.next().await },
+    );
     let mut headers = response_headers;
     headers.remove(header::CONTENT_LENGTH);
     headers.remove(header::CONTENT_ENCODING);
     headers.remove(TURN_STATE_HEADER);
     headers.insert(header::CONTENT_TYPE, "text/event-stream".parse().unwrap());
     SendOutcome::Response(UpstreamResponse::new_ws(headers, stream))
+}
+
+struct ResponseStream {
+    connection: Arc<Connection>,
+    reusable: ReusableSocket,
+    probe: Option<WsProbe>,
+    controls: tokio::sync::mpsc::Receiver<String>,
+    // The bool records whether the upstream acknowledgement is still pending.
+    interruption: Option<(String, bool)>,
+    terminal: Option<tokio::time::Instant>,
+    reusable_after_interrupt: bool,
+}
+
+impl ResponseStream {
+    async fn interrupt(&mut self, response_id: String) -> Result<(), UpstreamStreamError> {
+        let event = serde_json::json!({
+            "type": "response.interrupt", "response_id": response_id,
+            "mode": "discard_partial_items",
+        });
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.reusable
+                .connection
+                .socket
+                .send(Message::Text(event.to_string())),
+        )
+        .await
+        {
+            Ok(Ok(())) => {
+                self.interruption = Some((response_id, true));
+                Ok(())
+            }
+            _ => Err(protocol_error("WebSocket interrupt send failed")),
+        }
+    }
+
+    fn finish(mut self, bytes: Bytes) -> (Result<Bytes, UpstreamStreamError>, Option<Self>) {
+        if self.reusable_after_interrupt {
+            if let Some(probe) = self.probe.take() {
+                probe.succeeded();
+            }
+            *self.connection.upstream.lock_or_recover() = Some(self.reusable);
+        }
+        (Ok(bytes), None)
+    }
+
+    async fn next(mut self) -> Option<(Result<Bytes, UpstreamStreamError>, Option<Self>)> {
+        loop {
+            let ack_deadline = self.terminal.unwrap_or_else(tokio::time::Instant::now);
+            let message = tokio::select! {
+                biased;
+                control = self.controls.recv(), if self.interruption.is_none() && (!self.controls.is_closed() || !self.controls.is_empty()) => {
+                    if let Some(response_id) = control {
+                        if let Err(error) = self.interrupt(response_id).await {
+                            return Some((Err(error), None));
+                        }
+                    }
+                    continue;
+                },
+                _ = tokio::time::sleep_until(ack_deadline), if self.terminal.is_some() => {
+                    return Some((Err(protocol_error("WebSocket interrupt acknowledgement timed out")), None));
+                },
+                message = self.reusable.connection.socket.next() => message,
+            };
+            match message {
+                Some(Ok(Message::Text(text))) => {
+                    let mut event: Value = match serde_json::from_str(&text) {
+                        Ok(event) => event,
+                        Err(_) => {
+                            self.connection.runtime.cool(self.reusable.key.clone());
+                            return Some((
+                                Err(protocol_error("invalid upstream WebSocket JSON")),
+                                None,
+                            ));
+                        }
+                    };
+                    let kind = match protocol::event_kind(&event) {
+                        Ok(kind) => kind,
+                        Err(message) => {
+                            self.connection.runtime.cool(self.reusable.key.clone());
+                            return Some((Err(protocol_error(message)), None));
+                        }
+                    };
+                    match event.get("type").and_then(Value::as_str) {
+                        Some("response.created") => {
+                            if let Some(target) =
+                                self.connection.interrupt.lock_or_recover().as_mut()
+                            {
+                                target.response_id = event
+                                    .pointer("/response/id")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned);
+                            }
+                        }
+                        Some(
+                            ack @ ("response.interrupt.accepted" | "response.interrupt.failed"),
+                        ) => match self.interruption.as_mut() {
+                            Some((id, pending))
+                                if *pending
+                                    && event.get("response_id").and_then(Value::as_str)
+                                        == Some(id.as_str()) =>
+                            {
+                                *pending = false;
+                                self.reusable_after_interrupt =
+                                    ack == "response.interrupt.accepted";
+                            }
+                            _ => {
+                                return Some((
+                                    Err(protocol_error(
+                                        "Unexpected WebSocket interrupt acknowledgement",
+                                    )),
+                                    None,
+                                ))
+                            }
+                        },
+                        _ => {}
+                    }
+                    if let Some(headers) = event.get_mut("headers").and_then(Value::as_object_mut) {
+                        if let Some(value) = headers
+                            .remove(TURN_STATE_HEADER)
+                            .and_then(|value| value.as_str().map(str::to_owned))
+                        {
+                            self.reusable.turn_state = Some(value);
+                        }
+                    }
+                    let bytes = protocol::sse_bytes(&event);
+                    if kind == protocol::EventKind::Failed {
+                        return Some((Ok(bytes), None));
+                    }
+                    if matches!(
+                        kind,
+                        protocol::EventKind::Completed | protocol::EventKind::Incomplete
+                    ) {
+                        // Seal the queue before caching: an interrupt already accepted by
+                        // ingress must reach upstream even when completion wins the read race.
+                        self.controls.close();
+                        if let Ok(response_id) = self.controls.try_recv() {
+                            if let Err(error) = self.interrupt(response_id).await {
+                                return Some((Err(error), None));
+                            }
+                        }
+                        if self
+                            .interruption
+                            .as_ref()
+                            .is_some_and(|(_, pending)| *pending)
+                        {
+                            self.terminal = Some(
+                                tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+                            );
+                            return Some((Ok(bytes), Some(self)));
+                        }
+                        return Some(self.finish(bytes));
+                    }
+                    if self.terminal.is_some()
+                        && self
+                            .interruption
+                            .as_ref()
+                            .is_some_and(|(_, pending)| !*pending)
+                    {
+                        return Some(self.finish(bytes));
+                    }
+                    return Some((Ok(bytes), Some(self)));
+                }
+                Some(Ok(Message::Ping(bytes))) => {
+                    if self
+                        .reusable
+                        .connection
+                        .socket
+                        .send(Message::Pong(bytes))
+                        .await
+                        .is_err()
+                    {
+                        self.connection.runtime.cool(self.reusable.key.clone());
+                        return Some((Err(protocol_error("WebSocket pong failed")), None));
+                    }
+                }
+                Some(Ok(Message::Pong(_))) => {}
+                _ => {
+                    self.connection.runtime.cool(self.reusable.key.clone());
+                    return Some((
+                        Err(protocol_error("WebSocket closed before terminal response")),
+                        None,
+                    ));
+                }
+            }
+        }
+    }
 }
 
 /// Inspect only explicit capability errors. Retain every consumed byte for the

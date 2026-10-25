@@ -10,6 +10,7 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use serde_json::Value;
 use std::collections::VecDeque;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 pub(in crate::gateway) enum Failure {
@@ -218,7 +219,13 @@ impl Gate {
                 if let Some(bytes) = gate.pop_ready() {
                     return Some((Ok(bytes), Some((gate, lease))));
                 }
-                if gate.terminal {
+                if gate.terminal
+                    && !gate
+                        .request
+                        .connection
+                        .interrupt_pending
+                        .load(Ordering::Acquire)
+                {
                     return None;
                 }
                 match gate.next_event().await {

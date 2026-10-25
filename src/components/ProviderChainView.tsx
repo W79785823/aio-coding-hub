@@ -2,7 +2,10 @@ import { useMemo, useState } from "react";
 import { Spinner } from "../ui/Spinner";
 import { cn } from "../utils/cn";
 import { Globe, AlertTriangle, Zap, ChevronDown, ArrowRight } from "lucide-react";
-import { getGatewayErrorShortLabel } from "../constants/gatewayErrorCodes";
+import {
+  CLIENT_ABORT_ERROR_CODES,
+  getGatewayErrorShortLabel,
+} from "../constants/gatewayErrorCodes";
 import { DisclosureSection } from "./home/DisclosureSection";
 import { parseAttemptsJson, type AttemptJsonEntry } from "../services/gateway/attemptsJson";
 import { normalizeCircuitState } from "../services/gateway/circuitState";
@@ -177,7 +180,10 @@ export function ProviderChainView({
       ? finalAttempt.provider_name
       : `未知（id=${finalAttempt.provider_id}）`
     : "—";
-  const finalSuccess = finalAttempt ? finalAttempt.outcome === "success" : false;
+  const finalClientAbort =
+    finalAttempt?.error_category === "CLIENT_ABORT" ||
+    !!(finalAttempt?.error_code && CLIENT_ABORT_ERROR_CODES.has(finalAttempt.error_code));
+  const finalSuccess = !finalClientAbort && finalAttempt?.outcome === "success";
 
   return (
     <div className="mt-4 space-y-4">
@@ -196,12 +202,14 @@ export function ProviderChainView({
           <span
             className={cn(
               "rounded-full px-2.5 py-1 font-medium",
-              finalSuccess
-                ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
-                : "bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400"
+              finalClientAbort
+                ? "bg-secondary text-secondary-foreground"
+                : finalSuccess
+                  ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                  : "bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400"
             )}
           >
-            {finalSuccess ? "最终成功" : "最终失败"}
+            {finalClientAbort ? "客户端中断" : finalSuccess ? "最终成功" : "最终失败"}
           </span>
         ) : null}
         <span className="text-muted-foreground">{dataSourceLabel}</span>
@@ -246,8 +254,16 @@ function AttemptCard({
   hasMultipleAttempts: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
-  const success = attempt.outcome === "success";
+  const clientAborted =
+    attempt.error_category === "CLIENT_ABORT" ||
+    !!(attempt.error_code && CLIENT_ABORT_ERROR_CODES.has(attempt.error_code));
+  const success = !clientAborted && attempt.outcome === "success";
   const skipped = attempt.outcome === "skipped";
+  const reasonCode =
+    clientAborted &&
+    (attempt.reason_code === "request_success" || attempt.reason_code === "retry_success")
+      ? "aborted"
+      : attempt.reason_code;
 
   const hasCircuitBreaker =
     attempt.circuit_state_after != null || attempt.circuit_state_before != null;
@@ -259,7 +275,7 @@ function AttemptCard({
           "absolute -left-8 top-4 flex h-8 w-8 items-center justify-center rounded-full border-2 bg-white text-sm font-semibold shadow-sm dark:bg-card",
           success
             ? "border-emerald-300 text-emerald-600 dark:border-emerald-700 dark:text-emerald-400"
-            : skipped
+            : skipped || clientAborted
               ? "border-border text-muted-foreground dark:border-border dark:text-secondary-foreground"
               : "border-rose-300 text-rose-600 dark:border-rose-700 dark:text-rose-400"
         )}
@@ -273,7 +289,7 @@ function AttemptCard({
           isFinal
             ? success
               ? "border-emerald-200 bg-emerald-50/50 dark:border-emerald-700 dark:bg-emerald-900/20"
-              : skipped
+              : skipped || clientAborted
                 ? "border-border bg-secondary/50 dark:border-border dark:bg-secondary/20"
                 : "border-rose-200 bg-rose-50/50 dark:border-rose-700 dark:bg-rose-900/20"
             : "border-border"
@@ -287,13 +303,15 @@ function AttemptCard({
         >
           <div className="flex flex-wrap items-center gap-2 min-w-0">
             <span className="text-base font-semibold text-foreground">
-              {success
-                ? `请求成功`
-                : skipped
-                  ? `跳过`
-                  : hasMultipleAttempts
-                    ? `重试 #${attempt.attempt_index}`
-                    : `请求失败`}
+              {clientAborted
+                ? "客户端中断"
+                : success
+                  ? `请求成功`
+                  : skipped
+                    ? `跳过`
+                    : hasMultipleAttempts
+                      ? `重试 #${attempt.attempt_index}`
+                      : `请求失败`}
             </span>
             {attempt.attempt_duration_ms != null ? (
               <span className="text-xs text-muted-foreground">
@@ -304,7 +322,7 @@ function AttemptCard({
               <span
                 className={cn(
                   "text-xs font-medium",
-                  attempt.status >= 400
+                  attempt.status >= 400 && !clientAborted
                     ? "text-rose-600 dark:text-rose-400"
                     : "text-muted-foreground"
                 )}
@@ -330,7 +348,7 @@ function AttemptCard({
             </div>
 
             {/* Decision tags */}
-            <DecisionTags attempt={attempt} />
+            <DecisionTags attempt={attempt} clientAborted={clientAborted} />
 
             {attempt.base_url ? (
               <div className="flex items-start gap-2 text-sm">
@@ -360,16 +378,21 @@ function AttemptCard({
               </div>
             ) : null}
 
-            {skipped && attempt.reason ? (
+            {(skipped || clientAborted) && attempt.reason ? (
               <div className="rounded-lg border border-border bg-secondary/50 px-3 py-2">
-                <div className="mb-1 text-xs font-medium text-muted-foreground">跳过原因</div>
+                <div className="mb-1 text-xs font-medium text-muted-foreground">
+                  {clientAborted ? "中断原因" : "跳过原因"}
+                  {clientAborted && reasonCode ? (
+                    <span className="ml-2 font-mono">{reasonCode}</span>
+                  ) : null}
+                </div>
                 <pre className="whitespace-pre-wrap break-all text-xs font-mono text-secondary-foreground leading-relaxed">
                   {attempt.reason}
                 </pre>
               </div>
             ) : null}
 
-            {!success && !skipped && attempt.reason ? (
+            {!success && !skipped && !clientAborted && attempt.reason ? (
               <div className="rounded-lg border border-rose-200/60 bg-rose-50/50 px-3 py-3 dark:border-rose-500/20 dark:bg-rose-950/20">
                 <div className="flex items-center gap-1.5 mb-2">
                   <AlertTriangle className="h-4 w-4 text-rose-500 dark:text-rose-400 shrink-0" />
@@ -390,7 +413,7 @@ function AttemptCard({
 
             {/* Expandable structured error details */}
             {!success && !skipped && hasStructuredDetails(attempt) ? (
-              <DisclosureSection label="结构化错误详情">
+              <DisclosureSection label={clientAborted ? "结构化中断详情" : "结构化错误详情"}>
                 <div className="space-y-1.5 text-xs">
                   {attempt.error_code ? (
                     <div className="flex items-baseline gap-2">
@@ -412,7 +435,7 @@ function AttemptCard({
                     <div className="flex items-baseline gap-2">
                       <span className="shrink-0 text-muted-foreground">决策:</span>
                       <span className="font-mono text-secondary-foreground">
-                        {attempt.decision}
+                        {clientAborted ? "abort" : attempt.decision}
                       </span>
                     </div>
                   ) : null}
@@ -461,7 +484,13 @@ const DECISION_BADGE_TONES: Record<string, string> = {
   abort: "bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300",
 };
 
-function DecisionTags({ attempt }: { attempt: ProviderChainAttempt }) {
+function DecisionTags({
+  attempt,
+  clientAborted,
+}: {
+  attempt: ProviderChainAttempt;
+  clientAborted: boolean;
+}) {
   const tags: Array<{ label: string; value: string; tone: string }> = [];
 
   if (attempt.selection_method) {
@@ -474,17 +503,20 @@ function DecisionTags({ attempt }: { attempt: ProviderChainAttempt }) {
   if (attempt.decision) {
     tags.push({
       label: "决策",
-      value: attempt.decision,
-      tone:
-        DECISION_BADGE_TONES[attempt.decision] ??
-        "bg-secondary text-secondary-foreground dark:bg-secondary dark:text-secondary-foreground",
+      value: clientAborted ? "abort" : attempt.decision,
+      tone: clientAborted
+        ? "bg-secondary text-secondary-foreground"
+        : (DECISION_BADGE_TONES[attempt.decision] ??
+          "bg-secondary text-secondary-foreground dark:bg-secondary dark:text-secondary-foreground"),
     });
   }
   if (attempt.error_code) {
     tags.push({
       label: "错误码",
       value: getGatewayErrorShortLabel(attempt.error_code),
-      tone: "bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300",
+      tone: clientAborted
+        ? "bg-secondary text-secondary-foreground"
+        : "bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300",
     });
   }
   if (attempt.error_category) {

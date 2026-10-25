@@ -6635,6 +6635,8 @@ module.exports.activate = function activate(api) {
             attempts[0].get("outcome").and_then(Value::as_str),
             Some("success")
         );
+        assert_eq!(attempts[0]["decision"], "success");
+        assert_eq!(attempts[0]["reason_code"], "request_success");
 
         sse_task.abort();
     }
@@ -6757,6 +6759,8 @@ module.exports.activate = function activate(api) {
             attempts[0].get("error_category").and_then(Value::as_str),
             Some("CLIENT_ABORT")
         );
+        assert_eq!(attempts[0]["decision"], "abort");
+        assert_eq!(attempts[0]["reason_code"], "aborted");
 
         let special_settings: Value = serde_json::from_str(
             detail
@@ -6788,6 +6792,8 @@ module.exports.activate = function activate(api) {
             error_details.get("error_category").and_then(Value::as_str),
             Some("CLIENT_ABORT")
         );
+        assert_eq!(error_details["decision"], "abort");
+        assert_eq!(error_details["reason_code"], "aborted");
         let circuit_snapshot = circuit.snapshot(provider_id, 0);
         assert_eq!(
             circuit_snapshot.state,
@@ -7193,6 +7199,8 @@ module.exports.activate = function activate(api) {
             attempts[0].get("error_category").and_then(Value::as_str),
             Some("PROVIDER_ERROR")
         );
+        assert_eq!(attempts[0]["decision"], "abort");
+        assert_eq!(attempts[0]["reason_code"], "retry_failed");
 
         let error_details: Value = serde_json::from_str(
             detail
@@ -7215,6 +7223,8 @@ module.exports.activate = function activate(api) {
             error_details.get("error_category").and_then(Value::as_str),
             Some("PROVIDER_ERROR")
         );
+        assert_eq!(error_details["decision"], "abort");
+        assert_eq!(error_details["reason_code"], "retry_failed");
 
         let circuit_snapshot = circuit.snapshot(provider_id, 0);
         assert_eq!(

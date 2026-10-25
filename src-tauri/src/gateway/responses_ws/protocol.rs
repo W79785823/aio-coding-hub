@@ -53,9 +53,11 @@ pub(in crate::gateway) fn event_kind(event: &Value) -> Result<EventKind, &'stati
                 },
             )
         }
-        "response.metadata" | "codex.response.metadata" | "codex.rate_limits" => {
-            Ok(EventKind::Metadata)
-        }
+        "response.metadata"
+        | "codex.response.metadata"
+        | "codex.rate_limits"
+        | "response.interrupt.accepted"
+        | "response.interrupt.failed" => Ok(EventKind::Metadata),
         _ => Ok(EventKind::Content),
     }
 }

@@ -4,7 +4,7 @@
 // - Designed to keep status badge / error_code label rendering consistent across the Home page.
 
 import { createElement, type ReactNode } from "react";
-import { GatewayErrorCodes } from "../../constants/gatewayErrorCodes";
+import { CLIENT_ABORT_ERROR_CODES, GatewayErrorCodes } from "../../constants/gatewayErrorCodes";
 import {
   parseRequestLogSpecialSettings,
   resolveCodexResponsesTransportRecords,
@@ -14,11 +14,6 @@ import type { RequestLogRouteHop } from "../../services/gateway/requestLogs";
 import type { TraceSession } from "../../services/gateway/traceStore";
 import { RouteTooltipContent } from "./RouteTooltipContent";
 import { getErrorCodeLabel } from "./requestLogErrorLabels";
-
-const CLIENT_ABORT_ERROR_CODES: ReadonlySet<string> = new Set([
-  GatewayErrorCodes.STREAM_ABORTED,
-  GatewayErrorCodes.REQUEST_ABORTED,
-]);
 
 const STATUS_TEXT_UNKNOWN = "状态未知";
 

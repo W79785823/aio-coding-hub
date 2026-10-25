@@ -4,7 +4,8 @@ use super::finalize::finalize_circuit_and_session;
 use super::StreamFinalizeCtx;
 use crate::gateway::active_requests::ActiveRequestFinishReason;
 use crate::gateway::proxy::{
-    spawn_enqueue_request_log_with_backpressure, GatewayErrorCode, RequestLogEnqueueArgs,
+    spawn_enqueue_request_log_with_backpressure, ErrorCategory, GatewayErrorCode,
+    RequestLogEnqueueArgs,
 };
 use crate::gateway::response_fixer;
 
@@ -175,9 +176,19 @@ pub(super) fn emit_request_event_and_spawn_request_log<R: tauri::Runtime>(
                     completion.error_code.unwrap_or("unknown")
                 );
                 last.error_code = completion.error_code;
-                last.error_category = effective_error_category.or(Some(
-                    crate::gateway::proxy::ErrorCategory::SystemError.as_str(),
-                ));
+                last.error_category =
+                    effective_error_category.or(Some(ErrorCategory::SystemError.as_str()));
+                last.decision = Some("abort");
+                last.reason_code = Some(
+                    if last.error_category == Some(ErrorCategory::ClientAbort.as_str()) {
+                        ErrorCategory::ClientAbort
+                    } else if last.error_category == Some(ErrorCategory::ProviderError.as_str()) {
+                        ErrorCategory::ProviderError
+                    } else {
+                        ErrorCategory::SystemError
+                    }
+                    .reason_code(),
+                );
                 // Update duration to the full stream duration instead of the initial value.
                 last.attempt_duration_ms = Some(duration_ms);
             }

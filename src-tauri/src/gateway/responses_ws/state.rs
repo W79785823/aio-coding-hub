@@ -99,10 +99,12 @@ impl Runtime {
             continuation: Mutex::new(None),
             upstream: Mutex::new(None),
             prewarm: Mutex::new(None),
+            interrupt: Mutex::new(None),
+            interrupt_pending: AtomicBool::new(false),
         }))
     }
 
-    fn reserve_raw_buffers(&self) -> Result<OwnedSemaphorePermit, &'static str> {
+    pub(super) fn reserve_raw_buffers(&self) -> Result<OwnedSemaphorePermit, &'static str> {
         self.raw_buffers
             .clone()
             .try_acquire_many_owned(RAW_BUFFER_RESERVATION)
@@ -665,6 +667,8 @@ impl Runtime {
                 continuation: Mutex::new(None),
                 upstream: Mutex::new(None),
                 prewarm: Mutex::new(None),
+                interrupt: Mutex::new(None),
+                interrupt_pending: AtomicBool::new(false),
             }),
             client_ws: false,
             generation: Arc::new(Mutex::new(Generation {
@@ -779,6 +783,14 @@ pub(in crate::gateway) struct Connection {
     pub(in crate::gateway) continuation: Mutex<Option<Continuation>>,
     pub(in crate::gateway) upstream: Mutex<Option<ReusableSocket>>,
     pub(in crate::gateway) prewarm: Mutex<Option<Prewarm>>,
+    pub(super) interrupt: Mutex<Option<InterruptTarget>>,
+    // Ingress clears this only after receiving the acknowledgement, even after a terminal.
+    pub(super) interrupt_pending: AtomicBool,
+}
+
+pub(super) struct InterruptTarget {
+    pub(super) response_id: Option<String>,
+    pub(super) sender: tokio::sync::mpsc::Sender<String>,
 }
 
 pub(in crate::gateway) struct Prewarm {

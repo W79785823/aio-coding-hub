@@ -2857,6 +2857,12 @@ async fn disabling_ws_finishes_accepted_generation_then_rejects_new_ws_and_keeps
 #[path = "integration_plugin_tests.rs"]
 mod plugin_tests;
 
+#[path = "integration_pending_tests.rs"]
+mod pending_tests;
+
+#[path = "integration_cli_interrupt_tests.rs"]
+mod cli_interrupt_tests;
+
 #[tokio::test(flavor = "current_thread")]
 async fn custom_headers_ws_fallback_and_failover_do_not_leak_identity() {
     for failover in [false, true] {
@@ -3649,3 +3655,6 @@ async fn real_claude_cli_reports_circuit_failure_and_new_request_recovers() {
     .unwrap();
     println!("Claude circuit failure and recovery: {rows} failure logs, rejected upstream=0, recovered upstream={}", upstream_calls.load(Ordering::Relaxed));
 }
+
+#[path = "integration_interrupt_tests.rs"]
+mod interrupt_tests;

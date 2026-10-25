@@ -19,6 +19,7 @@ use axum::http::{header, HeaderMap, Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use serde_json::Value;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -108,6 +109,7 @@ async fn serve<R>(
 {
     let mut stop = state.responses_ws.shutdown.subscribe();
     let mut changed = state.responses_ws.changed.subscribe();
+    let mut pending = None;
     loop {
         if !state.responses_ws.enabled() || connection.epoch != state.responses_ws.epoch() {
             break;
@@ -115,13 +117,17 @@ async fn serve<R>(
         let idle_timeout_secs = crate::settings::read(&state.app)
             .map(|settings| settings.upstream_stream_idle_timeout_seconds)
             .unwrap_or(crate::settings::DEFAULT_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS);
-        let message = tokio::select! {
-            _ = stop.changed() => break,
-            _ = changed.changed() => break,
-            _ = tokio::time::sleep(Duration::from_secs(idle_timeout_secs.into())), if idle_timeout_secs > 0 => break,
-            message = socket.next() => match message {
-                Some(Ok(message)) => message, _ => break,
-            },
+        let message = if let Some((text, _buffers)) = pending.take() {
+            Message::Text(text)
+        } else {
+            tokio::select! {
+                _ = stop.changed() => break,
+                _ = changed.changed() => break,
+                _ = tokio::time::sleep(Duration::from_secs(idle_timeout_secs.into())), if idle_timeout_secs > 0 => break,
+                message = socket.next() => match message {
+                    Some(Ok(message)) => message, _ => break,
+                },
+            }
         };
         let text = match message {
             Message::Text(text) => text,
@@ -146,6 +152,12 @@ async fn serve<R>(
             }
         };
         drop(text);
+        if body.get("type").and_then(Value::as_str) == Some("response.interrupt") {
+            if !handle_interrupt(&mut socket, &connection, &body).await {
+                break;
+            }
+            continue;
+        }
         if body.get("type").and_then(Value::as_str) != Some("response.create")
             || !body.get("input").is_some_and(Value::is_array)
         {
@@ -296,7 +308,7 @@ async fn serve<R>(
             tokio::select! {
                 _ = stop.changed() => return,
                 response = &mut forward => break response,
-                message = socket.next() => if !handle_busy_message(&mut socket, message).await { return; },
+                message = socket.next() => if !handle_busy_message(&mut socket, message, &mut pending, &connection).await { return; },
             }
         };
         let status = response.status();
@@ -310,13 +322,14 @@ async fn serve<R>(
         let mut bytes = response.into_body().into_data_stream();
         let mut decoder = EventDecoder::default();
         let mut terminal = false;
+        let mut warm_response_id = None;
         let mut error = !success;
         let mut error_body = Vec::new();
         loop {
             let chunk = tokio::select! {
                 _ = stop.changed() => return,
                 chunk = bytes.next() => chunk,
-                message = socket.next() => { if !handle_busy_message(&mut socket, message).await { return; } continue; },
+                message = socket.next() => { if !handle_busy_message(&mut socket, message, &mut pending, &connection).await { return; } continue; },
             };
             let Some(chunk) = chunk else {
                 break;
@@ -351,6 +364,12 @@ async fn serve<R>(
                     event = crate::gateway::client_error::normalize_ws_error(event, None);
                 }
                 let kind = protocol::event_kind(&event).unwrap();
+                if matches!(
+                    event.get("type").and_then(Value::as_str),
+                    Some("response.interrupt.accepted" | "response.interrupt.failed")
+                ) {
+                    connection.interrupt_pending.store(false, Ordering::Release);
+                }
                 if prewarm {
                     if event.get("type").and_then(Value::as_str)
                         == Some("response.output_item.done")
@@ -360,20 +379,10 @@ async fn serve<R>(
                         }
                     }
                     if kind == EventKind::Completed {
-                        if let (Some(id), Some(provider_id)) = (
-                            event.pointer("/response/id").and_then(Value::as_str),
-                            connection
-                                .upstream
-                                .lock_or_recover()
-                                .as_ref()
-                                .map(|socket| socket.provider_id),
-                        ) {
-                            *connection.prewarm.lock_or_recover() = Some(state::Prewarm {
-                                response_id: id.into(),
-                                provider_id,
-                                history: warm_history.clone(),
-                            });
-                        }
+                        warm_response_id = event
+                            .pointer("/response/id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
                     }
                 }
                 if send_event(&mut socket, &event).await.is_err() {
@@ -385,11 +394,29 @@ async fn serve<R>(
                 ) {
                     terminal = true;
                     error = kind == EventKind::Failed;
-                    break;
                 }
             }
-            if terminal || error {
+            if (terminal && !connection.interrupt_pending.load(Ordering::Acquire)) || error {
                 break;
+            }
+        }
+        if terminal && connection.interrupt_pending.load(Ordering::Acquire) {
+            break;
+        }
+        if !error {
+            if let (Some(response_id), Some(provider_id)) = (
+                warm_response_id,
+                connection
+                    .upstream
+                    .lock_or_recover()
+                    .as_ref()
+                    .map(|socket| socket.provider_id),
+            ) {
+                *connection.prewarm.lock_or_recover() = Some(state::Prewarm {
+                    response_id,
+                    provider_id,
+                    history: warm_history,
+                });
             }
         }
         if !terminal {
@@ -441,18 +468,106 @@ async fn serve<R>(
 async fn handle_busy_message(
     socket: &mut WebSocket,
     message: Option<Result<Message, axum::Error>>,
+    pending: &mut Option<(String, tokio::sync::OwnedSemaphorePermit)>,
+    connection: &Connection,
 ) -> bool {
     match message {
         Some(Ok(Message::Ping(bytes))) => socket.send(Message::Pong(bytes)).await.is_ok(),
         Some(Ok(Message::Pong(_))) => true,
-        Some(Ok(Message::Text(_))) => send_event(
-            socket,
-            &protocol::error_event("response_in_progress", "A response is already in progress"),
-        )
-        .await
-        .is_ok(),
+        Some(Ok(Message::Text(text))) => {
+            let body = match serde_json::from_str::<Value>(&text) {
+                Ok(body) => body,
+                Err(_) => {
+                    return send_event(
+                        socket,
+                        &protocol::error_event("invalid_request", "Invalid JSON response.create"),
+                    )
+                    .await
+                    .is_ok()
+                }
+            };
+            if body.get("type").and_then(Value::as_str) == Some("response.interrupt") {
+                return handle_interrupt(socket, connection, &body).await;
+            }
+            if body.get("type").and_then(Value::as_str) != Some("response.create")
+                || !body.get("input").is_some_and(Value::is_array)
+            {
+                return send_event(
+                    socket,
+                    &protocol::error_event(
+                        "invalid_request",
+                        "Expected response.create with input array",
+                    ),
+                )
+                .await
+                .is_ok();
+            }
+            if pending.is_some() {
+                return send_event(
+                    socket,
+                    &protocol::error_event(
+                        "response_in_progress",
+                        "A response is already in progress",
+                    ),
+                )
+                .await
+                .is_ok();
+            }
+            // shortcut: buffer one early create; expand only if clients need deeper pipelining.
+            match connection.runtime.reserve_raw_buffers() {
+                Ok(buffers) => {
+                    *pending = Some((text, buffers));
+                    true
+                }
+                Err(message) => send_event(
+                    socket,
+                    &protocol::error_event("resource_exhausted", message),
+                )
+                .await
+                .is_ok(),
+            }
+        }
         _ => false,
     }
+}
+
+async fn handle_interrupt(socket: &mut WebSocket, connection: &Connection, body: &Value) -> bool {
+    let response_id = body
+        .get("response_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let forwarded = {
+        let mut target = connection.interrupt.lock_or_recover();
+        let valid = !response_id.is_empty()
+            && response_id.len() <= 512
+            && body.get("mode").and_then(Value::as_str) == Some("discard_partial_items");
+        let forwarded = valid
+            && target.as_ref().is_some_and(|target| {
+                if target.response_id.as_deref() != Some(response_id) {
+                    return false;
+                }
+                connection.interrupt_pending.store(true, Ordering::Release);
+                if target.sender.try_send(response_id.to_owned()).is_ok() {
+                    true
+                } else {
+                    connection.interrupt_pending.store(false, Ordering::Release);
+                    false
+                }
+            });
+        if forwarded {
+            target.take();
+        }
+        forwarded
+    };
+    forwarded
+        || send_event(
+            socket,
+            &serde_json::json!({
+                "type": "response.interrupt.failed", "response_id": response_id,
+            }),
+        )
+        .await
+        .is_ok()
 }
 
 fn prepare_request(

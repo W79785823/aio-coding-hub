@@ -3,6 +3,79 @@ import { describe, expect, it } from "vitest";
 import { ProviderChainView } from "../ProviderChainView";
 
 describe("components/ProviderChainView", () => {
+  it.each([
+    [null, "success", "request_success"],
+    ["GW_STREAM_ABORTED", "success", "request_success"],
+    ["GW_REQUEST_ABORTED", "success", "request_success"],
+    ["GW_STREAM_ABORTED", "success", "retry_success"],
+    [null, "abort", "aborted"],
+    ["GW_STREAM_ABORTED", "abort", "aborted"],
+    ["GW_REQUEST_ABORTED", "abort", "aborted"],
+  ])(
+    "renders %s with decision=%s and reason=%s as a neutral client interruption",
+    (errorCode, decision, reasonCode) => {
+      const attempt = {
+        provider_id: 1,
+        provider_name: "P1",
+        base_url: "https://p1",
+        outcome: "stream_error",
+        status: 499,
+        error_code: errorCode,
+        error_category: errorCode ? null : "CLIENT_ABORT",
+        decision,
+        reason_code: reasonCode,
+        reason: "client disconnected after output",
+      };
+      const { container } = render(
+        <ProviderChainView
+          attemptLogs={decision === "success" ? [{ ...attempt, attempt_index: 1 }] : []}
+          attemptsJson={JSON.stringify([attempt])}
+        />
+      );
+      expect(screen.getAllByText("客户端中断")).toHaveLength(2);
+      expect(screen.queryByText("最终失败")).not.toBeInTheDocument();
+      expect(screen.queryByText("请求失败")).not.toBeInTheDocument();
+      expect(screen.queryByText("success")).not.toBeInTheDocument();
+      expect(screen.queryByText("request_success")).not.toBeInTheDocument();
+      expect(screen.queryByText("retry_success")).not.toBeInTheDocument();
+      expect(screen.getByText("aborted")).toBeInTheDocument();
+      expect(screen.getByText("HTTP 499")).toHaveClass("text-muted-foreground");
+      expect(screen.getByText("中断原因")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "结构化中断详情" }));
+      expect(screen.getByText("决策:").parentElement).toHaveTextContent("abort");
+      if (errorCode) {
+        expect(screen.getByText(new RegExp(`\\(${errorCode}\\)`))).toBeInTheDocument();
+      } else {
+        expect(screen.getAllByText("CLIENT_ABORT")).toHaveLength(2);
+      }
+      expect(container.querySelector('[class*="rose-"]')).toBeNull();
+    }
+  );
+
+  it("keeps genuine upstream stream failures red even when decision is abort", () => {
+    render(
+      <ProviderChainView
+        attemptLogs={[]}
+        attemptsJson={JSON.stringify([
+          {
+            provider_id: 1,
+            provider_name: "P1",
+            base_url: "https://p1",
+            outcome: "stream_error",
+            status: 502,
+            error_code: "GW_STREAM_ERROR",
+            decision: "abort",
+            reason: "upstream stream failed",
+          },
+        ])}
+      />
+    );
+    expect(screen.getByText("最终失败")).toHaveClass("text-rose-700");
+    expect(screen.getByText("请求失败")).toBeInTheDocument();
+    expect(screen.getByText("abort")).toHaveClass("text-rose-700");
+    expect(screen.getByText("upstream stream failed")).toHaveClass("text-rose-800");
+  });
+
   it("renders loading + empty + merged views", () => {
     const { rerender } = render(
       <ProviderChainView attemptLogs={[]} attemptLogsLoading attemptsJson={null} />

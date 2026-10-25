@@ -279,6 +279,68 @@ describe("home/RequestLogDetailDialog", () => {
     expect(screen.queryByText("切换供应商")).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["cancelled", "客户端中断", "中断结束"],
+    ["provider", "供应商失败", "失败结束"],
+  ])("labels failed transport terminal by its %s cause", (failureClass, label, terminal) => {
+    setRequestLogQueryState({
+      selectedLog: createSelectedLog({
+        cli_key: "codex",
+        attempts_json: "[]",
+        special_settings_json: JSON.stringify([
+          {
+            type: "codex_responses_transport",
+            client_transport: "responses_ws",
+            upstream_transport: "responses_ws",
+            failure_class: failureClass,
+            terminal: "failed",
+            output_committed: true,
+          },
+        ]),
+      }),
+    });
+    render(<RequestLogDetailDialog selectedLogId={1} onSelectLogId={vi.fn()} />);
+    switchToTab("决策链");
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.getByText(`终态：${terminal}`)).toBeInTheDocument();
+    if (failureClass === "cancelled") {
+      expect(screen.queryByText("请求取消")).not.toBeInTheDocument();
+      expect(screen.queryByText("终态：失败结束")).not.toBeInTheDocument();
+      expect(screen.queryByText(/不能拼接新供应商响应/)).not.toBeInTheDocument();
+    }
+  });
+
+  it("preserves legacy success metadata in raw data while presenting the client abort", () => {
+    const attempts = [
+      {
+        provider_id: 12,
+        provider_name: "Provider A",
+        base_url: "https://provider-a.example",
+        outcome: "stream_error",
+        status: 499,
+        error_code: "GW_STREAM_ABORTED",
+        error_category: "CLIENT_ABORT",
+        decision: "success",
+        reason_code: "request_success",
+        reason: "client disconnected",
+      },
+    ];
+    setRequestLogQueryState({
+      selectedLog: createSelectedLog({
+        attempts_json: JSON.stringify(attempts),
+        error_details_json: null,
+      }),
+    });
+    render(<RequestLogDetailDialog selectedLogId={1} onSelectLogId={vi.fn()} />);
+    switchToTab("决策链");
+    expect(screen.getAllByText("客户端中断")).toHaveLength(2);
+    expect(screen.queryByText("success")).not.toBeInTheDocument();
+    expect(screen.queryByText("request_success")).not.toBeInTheDocument();
+    switchToTab("原始数据");
+    const raw = screen.getByText(/"reason_code": "request_success"/);
+    expect(JSON.parse(raw.textContent ?? "")).toEqual(attempts);
+  });
+
   it.each([null, "bad-json", JSON.stringify([{ type: "other" }])])(
     "keeps transport details hidden for legacy logs (%s)",
     (specialSettings) => {

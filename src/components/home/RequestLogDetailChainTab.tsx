@@ -23,7 +23,7 @@ const FAILURE_CLASS_LABELS = new Map([
   ["client_input", "请求输入错误"],
   ["context", "上下文缺失"],
   ["local", "本地错误"],
-  ["cancelled", "请求取消"],
+  ["cancelled", "客户端中断"],
 ]);
 
 function transportLabel(value: "http" | "responses_ws" | null) {
@@ -90,7 +90,9 @@ export function RequestLogDetailChainTab({
                           ? "不完整结束"
                           : record.terminal === "completed"
                             ? "完整结束"
-                            : "失败结束"}
+                            : record.failureClass === "cancelled"
+                              ? "中断结束"
+                              : "失败结束"}
                       </span>
                     ) : null}
                     {record.handshakeStatus ? <span>WS 握手：{record.handshakeStatus}</span> : null}
